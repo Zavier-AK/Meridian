@@ -1,4 +1,6 @@
-# local-harness
+# Meridian
+
+_Formerly local-harness. The repository, crates and on-disk names (`.harness/`, `harness/…` branches) keep the old name so existing projects carry on working._
 
 A hierarchical multi-agent harness that runs on your **subscriptions** rather than API billing.
 
@@ -114,7 +116,7 @@ are refused rather than logged.
 The head agent is approved to read and to delegate, nothing more. When it wants to do
 something else itself — a `git` command, a `.gitignore`, a tool from one of your MCP
 connectors such as GitHub — the request appears in the chat with **Allow**,
-**Always allow** and **Deny**, and a notification if Harness is in the background. The
+**Always allow** and **Deny**, and a notification if Meridian is in the background. The
 turn waits for your answer.
 
 - **Allow** runs it this once.
@@ -130,7 +132,7 @@ Workers are unchanged: they run with their role's tools and never prompt.
 Workers branch from a commit, so a brand-new repository can't run them. The start screen
 and the chat both offer **Make the first commit**: it runs `git init` if needed, adds a
 `.gitignore` if there isn't one (`node_modules/`, `.env`, `target/`, `dist/` and the like),
-and commits everything else as "Initial commit". Harness's own `.harness/` folder is never
+and commits everything else as "Initial commit". Meridian's own `.harness/` folder is never
 included. Projects made by voice get this automatically.
 
 ## Roles and isolation
@@ -205,11 +207,46 @@ A finished change doesn't have to be all or nothing. In the review drawer:
   you're on. The title and description are filled in from the task, the worker's summary,
   the files and the checks, and you can edit all of it, or open it as a draft. With the
   GitHub CLI installed and signed in (`brew install gh`, `gh auth login`) it opens the
-  pull request directly and shows its checks in the drawer; without it, Harness pushes
+  pull request directly and shows its checks in the drawer; without it, Meridian pushes
   the branch with your own git credentials and opens GitHub's filled-in page in your
   browser to finish. A remote that isn't GitHub just gets the branch.
 
 Both are your clicks only: like merging, neither is a tool the head agent can call.
+
+## Seeing the whole picture
+
+- **Flow tab.** A live map of the session: you, the head agent, each worker, and where
+  their work goes — your branch, or a pull request on GitHub. Edges show each worker's
+  state (working, finished, waiting for review, landed, failed); a plan's steps that feed
+  later ones are joined too. When something moves — a message, a task, a result, a merge,
+  a revision, a pull request — a dot travels the edge it moved along, and the **What
+  moved** log underneath says what it was. Click a worker to open its review.
+- **Changes panel.** The right-hand panel switches between **Workers** and **Changes**.
+  Changes lists every file the session touched, with lines added and removed: what
+  workers are writing right now, what waits for review, what landed, and what's
+  uncommitted in your checkout (the head agent's own edits included). View it by file —
+  with which agents touched each one — or by agent. New files are marked; click one to
+  open the worker's review.
+
+## Look and feel
+
+**Settings → Typeface** offers six pairings, bundled with the app so nothing is fetched:
+**Space Grotesk** with DM Sans (the default), **Geist**, **IBM Plex**, **Fraunces + Inter**,
+**Manrope**, and the Mac's own **System** font. Clicking one previews it across the whole
+app; Save keeps it. Voice can change it too ("set the font to IBM Plex").
+
+## When Claude's sign-in fails
+
+If a Claude run fails to sign in ("OAuth token has expired", "could not be refreshed"),
+Meridian opens a **Claude sign-in** panel (also under Settings). It shows the `claude`
+Meridian actually runs, its version, and whether *that* one is signed in — which can
+differ from your terminal if they find different installs. Two fixes:
+
+- **Reconnect head agent** restarts the head agent's Claude process and carries on the
+  same conversation. This is the usual fix when you *are* signed in: the head agent is one
+  long-running process, and a sign-in token it holds can be refreshed (and so used up) by
+  another Claude process in the meantime — your terminal, or a worker.
+- **Sign in again** opens Terminal on `claude auth login` with that same `claude`.
 
 ## The plan board
 
@@ -283,7 +320,7 @@ harness-cli night "Make the benchmark faster" --metric ./bench.sh --lower \
 
 ## How much runs without you
 
-A four-stop dial in the title bar, set per project. ⌘⇧A cycles through it. This is
+A four-stop slider in the chat bar, set per project: click the level's name (Ask, Review, Land safe, Land most) and drag the knob, click a stop, or use the arrow keys. ⌘⇧A cycles through it. This is
 Karpathy's "autonomy slider": you decide how much the fleet does alone, and the
 **engine** enforces it; the model isn't just asked to behave.
 
@@ -330,7 +367,7 @@ is off until you turn it on in **Settings › Voice** and click **Save**.
 
 The bar appears at the top of the screen you're using. It works on any desktop and over
 full-screen apps (on macOS it's a floating panel, like Spotlight), and using it doesn't
-switch you to Harness. Click **×** to hide it.
+switch you to Meridian. Click **×** to hide it.
 
 - **Look:** "what's waiting for me?", "what's running", "how's the night shift going?",
   "show me the plan", "switch to blog", "open worker 3".
@@ -342,7 +379,7 @@ switch you to Harness. Click **×** to hide it.
   **typed into the chat box**, not sent. Edit it and press Enter yourself. More
   dictation is added after what is already there. To send by voice, say so: "send it"
   sends what's in the box, and "tell Claude to add retries and send it" sends at once.
-- **Everything else in Harness.** With the voice agent on, all of it:
+- **Everything else in Meridian.** With the voice agent on, all of it:
   - **Projects:** "make a new project called weather app" (a folder beside the current
     project, or in `~/Projects`, with a git repository and the default fleet, opened),
     "open the project in ~/code/site", "close the blog project" (asks first). By voice,
@@ -362,7 +399,7 @@ switch you to Harness. Click **×** to hide it.
     your yes. Without the command it opens the setup instead.
   - **Views:** chat, plan, night, preview, tools, settings, fleet, limits, projects.
 
-  Harness actions run through the same handlers as their buttons, and the agent hears
+  Meridian actions run through the same handlers as their buttons, and the agent hears
   whether each one worked, so it can tell you when something couldn't be done and why.
 - **The Mac:** "open Notes", "open Safari", "go to github.com", "open my downloads
   folder", "show the project in Finder", "open the project in VS Code".
@@ -389,7 +426,7 @@ switch you to Harness. Click **×** to hide it.
     push the branch at 5", "…in 20 minutes", "…tomorrow at 9:30". "At 5" means 5 PM.
   - **The Mac:** "turn it up", "volume down", "mute", "set the volume to 30 percent",
     "lock my screen" (sleeps the display).
-  - macOS asks once per app ("Harness wants to control Spotify"). Click OK.
+  - macOS asks once per app ("Meridian wants to control Spotify"). Click OK.
 - **Two at once:** "open notes and show me the plan" runs both, in order. It splits only
   when every part is a command on its own; "search for salt and pepper" stays one search.
 
@@ -529,7 +566,7 @@ the agent as one request.
 - **Asks you first.** Merging, rejecting or undoing a change, approving or declining a
   delegation, running or dropping a plan, stopping the night shift or a worker, and
   *raising* autonomy all wait for a yes: say it, or click it.
-- **Harness actions** run through the same handlers as their buttons, so voice can do
+- **Meridian actions** run through the same handlers as their buttons, so voice can do
   nothing a click couldn't.
 - **The Mac.** Computer actions are a fixed list, run with `open` and fixed arguments.
   There is never a shell. App names are plain characters, only `http(s)` addresses are

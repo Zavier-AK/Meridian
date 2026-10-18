@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppSettings, VoiceSettings } from "./types";
 import VoiceSettingsPanel from "./VoiceSettings";
+import { FONTS, applyFont } from "./fonts";
+import SignInPanel from "./SignInPanel";
 
 type Props = {
   onSaved: (settings: AppSettings) => void;
@@ -35,6 +37,11 @@ export default function SettingsView({ onSaved, onClose }: Props) {
     });
     return () => void off.then((f) => f());
   }, []);
+
+  // A font tried but not saved goes back when Settings closes.
+  const savedFont = useRef<string | null>(null);
+  savedFont.current = saved?.font ?? null;
+  useEffect(() => () => applyFont(savedFont.current), []);
 
   if (!settings) {
     return (
@@ -122,6 +129,40 @@ export default function SettingsView({ onSaved, onClose }: Props) {
       />
 
       <div className="settings-section">
+        <h3>Claude sign-in</h3>
+        <SignInPanel problem={null} inline />
+      </div>
+
+      <div className="settings-section">
+        <h3>Typeface</h3>
+        <div className="font-choices" role="radiogroup" aria-label="Typeface">
+          {FONTS.map((font) => (
+            <button
+              key={font.id}
+              role="radio"
+              aria-checked={settings.font === font.id}
+              className={`font-choice ${settings.font === font.id ? "chosen" : ""}`}
+              onClick={() => {
+                update({ font: font.id });
+                applyFont(font.id);
+              }}
+            >
+              <span className="font-sample-title" style={{ fontFamily: font.display }}>
+                {font.label}
+              </span>
+              <span className="font-sample-body" style={{ fontFamily: font.body }}>
+                The head agent plans; the workers build.
+              </span>
+              <span className="font-sample-mono" style={{ fontFamily: font.mono }}>
+                src/fetch.ts +12 −3
+              </span>
+              <span className="muted font-note">{font.note}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="settings-section">
         <h3>Accent</h3>
         <div className="swatches" role="radiogroup" aria-label="Accent colour">
           <button
@@ -154,7 +195,14 @@ export default function SettingsView({ onSaved, onClose }: Props) {
       </div>
 
       <div className="actions">
-        <button className="ghost" disabled={!dirty} onClick={() => setSettings(saved)}>
+        <button
+          className="ghost"
+          disabled={!dirty}
+          onClick={() => {
+            setSettings(saved);
+            applyFont(saved?.font);
+          }}
+        >
           Revert
         </button>
         <button className="primary" disabled={!dirty} onClick={() => void save()}>

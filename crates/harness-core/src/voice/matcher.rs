@@ -44,7 +44,7 @@ const NUMBERS: [(&str, &str); 30] = [
     ("ninth", "9"),
 ];
 
-const LEADING_FILLER: [&str; 22] = [
+const LEADING_FILLER: [&str; 23] = [
     "um",
     "uh",
     "er",
@@ -56,6 +56,7 @@ const LEADING_FILLER: [&str; 22] = [
     "and",
     "please",
     "harness",
+    "meridian",
     "ok so",
     "okay so",
     "can you",

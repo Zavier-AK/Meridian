@@ -4,6 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import StartGate from "./StartGate";
 import HeadChat from "./HeadChat";
 import WorkerRail from "./WorkerRail";
+import ChangesPanel from "./ChangesPanel";
+import FlowView from "./FlowView";
+import SignInPanel from "./SignInPanel";
 import DiffDrawer from "./DiffDrawer";
 import FleetDrawer from "./FleetDrawer";
 import ProjectSidebar from "./ProjectSidebar";
@@ -28,6 +31,7 @@ import type {
   VoicePhase,
   StepInput,
   ChatItem,
+  Flow,
   HarnessEvent,
   McpStatus,
   PermissionDecision,
@@ -52,7 +56,10 @@ export default function App() {
   const [rateLimited, setRateLimited] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [activePane, setActivePane] = useState<"chat" | "plan" | "night" | "preview">("chat");
+  const [activePane, setActivePane] = useState<"chat" | "plan" | "night" | "preview" | "flow">("chat");
+  // What moved between you, the head agent and the workers, newest first.
+  const [flows, setFlows] = useState<Flow[]>([]);
+  const workersRef = useRef<Record<string, Worker>>({});
   /** The project's night shift: running, or the last one's report. */
   const [night, setNight] = useState<NightReport | null>(null);
   const [nightGoal, setNightGoal] = useState<{ goal: string | null; at: number } | null>(null);
@@ -79,6 +86,10 @@ export default function App() {
   const [autonomy, setAutonomy] = useState<Autonomy>("review");
   /** Per project: which MCP servers its head agent's CLI managed to connect. */
   const [mcpStatus, setMcpStatus] = useState<Record<string, McpStatus>>({});
+  // Claude's sign-in failed somewhere: the help panel, with what it said.
+  const [signIn, setSignIn] = useState<{ problem: string | null } | null>(null);
+  // The head agent's model, as its CLI reported it when it started.
+  const [headModel, setHeadModel] = useState<string | null>(null);
   const [railCollapsed, setRailCollapsed] = useState(() => {
     try {
       return localStorage.getItem("harness.railCollapsed") === "1";
@@ -96,6 +107,23 @@ export default function App() {
       return !collapsed;
     });
   }
+  const [railMode, setRailMode] = useState<"workers" | "changes">(() => {
+    try {
+      return localStorage.getItem("meridian.railMode") === "changes" ? "changes" : "workers";
+    } catch {
+      return "workers";
+    }
+  });
+  function changeRailMode(mode: "workers" | "changes") {
+    setRailMode(mode);
+    try {
+      localStorage.setItem("meridian.railMode", mode);
+    } catch {
+      // Remembering is a convenience.
+    }
+  }
+  // Bumped whenever something may have changed the code, so the changes panel re-reads.
+  const [changesKey, setChangesKey] = useState(0);
   // False only once checked: a repository with no commits, where workers can't start.
   const [hasCommits, setHasCommits] = useState(true);
 
@@ -278,6 +306,7 @@ export default function App() {
         headRun.current = null;
         setChat([]);
         setWorkers({});
+        setFlows([]);
         setSelectedWorker(null);
         setBusy(false);
         setFleetOpen(false);
@@ -351,6 +380,13 @@ export default function App() {
     const unlisten = listen<ProjectHarnessEvent>("harness://event", ({ payload }) => {
       // Any project's head reports its MCP servers as it starts; kept per project so the
       // Tools view shows the truth for whichever is in front.
+      if (
+        payload.type === "session_started" &&
+        payload.run_id.startsWith("orchestrator-") &&
+        payload.project === session.project_root
+      ) {
+        setHeadModel(payload.model);
+      }
       if (payload.type === "session_started" && payload.run_id.startsWith("orchestrator-")) {
         const failed = payload.mcp_failed ?? [];
         setMcpStatus((prev) => ({
@@ -371,6 +407,9 @@ export default function App() {
       }
 
       setChat((prev) => reduceChat(prev, payload, headRun));
+      const flow = toFlow(payload, headRun.current, workersRef.current);
+      if (flow) setFlows((prev) => [flow, ...prev].slice(0, 300));
+      if (CHANGES_CODE.has(payload.type)) setChangesKey((key) => key + 1);
       setWorkers((prev) => reduceWorkers(prev, payload));
 
       if (payload.type === "api_retry") {
@@ -399,6 +438,10 @@ export default function App() {
             kept > 0 ? `${kept} improvement(s) kept — review them on the Night tab.` : "Nothing was kept.",
           );
         }
+      }
+      if (payload.type === "sign_in_problem") {
+        setSignIn({ problem: payload.message });
+        void notifyIfAway("Claude's sign-in failed", "Open Meridian to reconnect or sign in again.");
       }
       if (payload.type === "permission_request" && payload.run_id === headRun.current) {
         void notifyIfAway("The head agent is asking to do something", payload.description);
@@ -614,7 +657,7 @@ export default function App() {
         kind: "notice",
         tone: "info",
         text: info.resumed_head_session
-          ? `Session up. Resumed the previous Harness-owned Claude conversation. ${info.roles.length - blocked.length} of ${info.roles.length} roles ready.`
+          ? `Session up. Resumed the previous Meridian-owned Claude conversation. ${info.roles.length - blocked.length} of ${info.roles.length} roles ready.`
           : `Session up with a fresh Claude conversation. ${info.roles.length - blocked.length} of ${info.roles.length} roles ready.`,
       },
       // Surfaced here rather than discovered mid-delegation, which costs a turn.
@@ -717,8 +760,32 @@ export default function App() {
     );
   }
 
+  workersRef.current = workers;
   const workerList = Object.values(workers).sort((a, b) => b.startedAt - a.startedAt);
   const selected = selectedWorker ? workers[selectedWorker] : null;
+
+  const micButton = (
+    <button
+      className={`mic ${voicePhase} ${voiceOn ? "" : "off"}`}
+      title={voiceOn ? "Hold to talk (or hold ⌥Space anywhere)" : "Voice is off — turn it on in Settings"}
+      aria-label={voiceOn ? `Voice: ${voicePhase === "idle" ? "hold to talk" : voicePhase}` : "Voice is off"}
+      onPointerDown={() => {
+        if (voiceOn) void invoke("voice_start").catch(() => undefined);
+      }}
+      onPointerUp={() => {
+        if (voiceOn) void invoke("voice_stop").catch(() => undefined);
+        else setView("settings");
+      }}
+      onPointerLeave={() => {
+        if (voiceOn && voicePhase === "listening") void invoke("voice_stop").catch(() => undefined);
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+        <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" fill="currentColor" />
+        <path d="M6 11a6 6 0 0 0 12 0M12 17v4" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+      </svg>
+    </button>
+  );
 
   return (
     <div className="app">
@@ -727,32 +794,12 @@ export default function App() {
           buttons in it stay buttons. */}
       <header className="titlebar" data-tauri-drag-region>
         <span className="title" data-tauri-drag-region>
-          Harness
+          Meridian
         </span>
         <span className="muted mono" data-tauri-drag-region>
           {session.project_root}
         </span>
-        <AutonomyDial level={autonomy} onChange={(level) => void changeAutonomy(level)} />
-        <button
-          className={`mic ${voicePhase} ${voiceOn ? "" : "off"}`}
-          title={voiceOn ? "Hold to talk (or hold ⌥Space anywhere)" : "Voice is off — turn it on in Settings"}
-          aria-label={voiceOn ? `Voice: ${voicePhase === "idle" ? "hold to talk" : voicePhase}` : "Voice is off"}
-          onPointerDown={() => {
-            if (voiceOn) void invoke("voice_start").catch(() => undefined);
-          }}
-          onPointerUp={() => {
-            if (voiceOn) void invoke("voice_stop").catch(() => undefined);
-            else setView("settings");
-          }}
-          onPointerLeave={() => {
-            if (voiceOn && voicePhase === "listening") void invoke("voice_stop").catch(() => undefined);
-          }}
-        >
-          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden>
-            <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" fill="currentColor" />
-            <path d="M6 11a6 6 0 0 0 12 0M12 17v4" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" />
-          </svg>
-        </button>
+        <span className="titlebar-spacer" data-tauri-drag-region />
         <BudgetMeter
           usage={usage}
           rateLimited={rateLimited}
@@ -838,7 +885,27 @@ export default function App() {
               >
                 Preview
               </button>
+              <button
+                role="tab"
+                aria-selected={activePane === "flow"}
+                className={activePane === "flow" ? "active" : ""}
+                onClick={() => setActivePane("flow")}
+              >
+                Flow
+              </button>
             </nav>
+            {activePane === "flow" && (
+              <div className="tab-panel flow-panel" role="tabpanel">
+                <FlowView
+                  workers={workerList}
+                  flows={flows}
+                  headBusy={busy}
+                  headModel={headModel}
+                  plan={plan}
+                  onSelectWorker={setSelectedWorker}
+                />
+              </div>
+            )}
             <div
               className={`tab-panel chat-panel ${activePane === "chat" ? "" : "hidden"}`}
               role="tabpanel"
@@ -857,6 +924,9 @@ export default function App() {
                 onSelectWorker={setSelectedWorker}
                 onUndo={(id) => void undoMerge(id)}
                 onPermission={(id, decision) => void answerPermission(id, decision)}
+                model={headModel}
+                tools={<AutonomyDial level={autonomy} onChange={(level) => void changeAutonomy(level)} />}
+                mic={micButton}
                 needsFirstCommit={!hasCommits}
                 onFirstCommit={() => void makeFirstCommit()}
               />
@@ -917,8 +987,27 @@ export default function App() {
           onDecide={(id, approve, text) => void decide(id, approve, text)}
           collapsed={railCollapsed}
           onToggle={toggleRail}
+          mode={railMode}
+          onMode={changeRailMode}
+          changes={
+            <ChangesPanel workers={workers} refreshKey={changesKey} onSelectWorker={setSelectedWorker} />
+          }
         />
       </div>
+
+      {signIn && (
+        <SignInPanel
+          problem={signIn.problem}
+          onClose={() => setSignIn(null)}
+          onReconnected={() => {
+            setBusy(false);
+            setChat((prev) => [
+              ...prev,
+              { kind: "notice", tone: "info", text: "Reconnected the head agent with a fresh sign-in. Send your message again." },
+            ]);
+          }}
+        />
+      )}
 
       {limitsOpen && (
         <LimitsPanel quotas={quotas} usage={usage} onClose={() => setLimitsOpen(false)} />
@@ -1163,6 +1252,16 @@ function reduceChat(
     case "error":
       return [...prev, { kind: "notice", tone: "error", text: event.message }];
 
+    case "sign_in_problem":
+      return [
+        ...prev,
+        {
+          kind: "notice",
+          tone: "error",
+          text: "Claude's sign-in failed. The sign-in panel can reconnect the head agent or sign you in again.",
+        },
+      ];
+
     default:
       return prev;
   }
@@ -1199,7 +1298,7 @@ function reduceWorkers(
           activity: [],
           verification: null,
           // An approved delegation spawns under the id it waited with; keep its task.
-          task: prev[event.worker_id]?.task,
+          task: event.task || prev[event.worker_id]?.task,
         },
       };
 
@@ -1433,6 +1532,65 @@ function permissionDetail(input: unknown, description: string): string | null {
   }
   return null;
 }
+
+/** What an event moved between the parts of the system, for the flow view. */
+function toFlow(
+  event: HarnessEvent,
+  headRun: string | null,
+  workers: Record<string, Worker>,
+): Flow | null {
+  const at = Date.now();
+  const name = (id: string, role?: string, number?: number) => {
+    const worker = workers[id];
+    const n = number ?? worker?.number;
+    return `${n ? `#${n} ` : ""}${role ?? worker?.role ?? "worker"}`;
+  };
+  const flow = (from: string, fromLabel: string, to: string, toLabel: string, kind: Flow["kind"], text: string, workerId?: string): Flow => ({
+    at, from, fromLabel, to, toLabel, kind, text, workerId,
+  });
+  switch (event.type) {
+    case "user_message":
+      return flow("you", "You", "head", "Head agent", "message", event.text);
+    case "run_finished":
+      if (event.run_id !== headRun || event.is_error || !event.text.trim()) return null;
+      return flow("head", "Head agent", "you", "You", "reply", event.text);
+    case "permission_request":
+      if (event.run_id !== headRun) return null;
+      return flow("head", "Head agent", "you", "You", "ask", `wants to: ${event.description}`);
+    case "delegation_requested":
+      return flow("head", "Head agent", "you", "You", "ask", `wants to start ${event.role}: ${event.task}`, event.worker_id);
+    case "worker_spawned":
+      return flow("head", "Head agent", event.worker_id, name(event.worker_id, event.role, event.number || undefined), "task", event.task ?? "", event.worker_id);
+    case "worker_finished":
+      return flow(event.worker_id, name(event.worker_id), "head", "Head agent", "result", event.summary, event.worker_id);
+    case "merge_requested":
+      return flow(event.worker_id, name(event.worker_id), "branch", "Your branch", "review", `${event.diff.files_changed} file(s), +${event.diff.insertions} −${event.diff.deletions}`, event.worker_id);
+    case "verification_finished":
+      return flow(event.worker_id, name(event.worker_id), "you", "You", "checks", `${event.report.verified ? "" : "unverified, "}${event.report.risk} risk`, event.worker_id);
+    case "merge_landed":
+      return flow(event.worker_id, name(event.worker_id), "branch", "Your branch", "landed", event.automatic ? "landed by itself" : "merged", event.worker_id);
+    case "merge_reverted":
+      return flow("branch", "Your branch", event.worker_id, name(event.worker_id), "undone", "the merge was undone", event.worker_id);
+    case "worker_revising":
+      return flow("you", "You", event.worker_id, name(event.worker_id), "revision", `revision ${event.revision}`, event.worker_id);
+    case "pull_request_opened":
+      return flow(event.worker_id, name(event.worker_id), "github", "GitHub", "pr", event.number ? `#${event.number} · ${event.remote_branch}` : event.remote_branch, event.worker_id);
+    default:
+      return null;
+  }
+}
+
+/** Events after which the code may look different. */
+const CHANGES_CODE = new Set<HarnessEvent["type"]>([
+  "worker_spawned",
+  "worker_finished",
+  "worker_revising",
+  "merge_requested",
+  "merge_landed",
+  "merge_reverted",
+  "run_finished",
+  "permission_resolved",
+]);
 
 /** The head agent's earlier conversation, rebuilt from its recorded events. */
 function historyToChat(events: HarnessEvent[]): ChatItem[] {

@@ -20,6 +20,12 @@ type Props = {
   /** The repository has no commits yet, so workers can't start. */
   needsFirstCommit?: boolean;
   onFirstCommit?: () => void;
+  /** Controls along the bottom of the chat box, left of the send button. */
+  tools?: React.ReactNode;
+  /** The head agent's model, shown in the chat box. */
+  model?: string | null;
+  /** The hold-to-talk button, beside Send. */
+  mic?: React.ReactNode;
 };
 
 /** Tool calls into the harness read as delegation, not as plumbing. */
@@ -56,6 +62,9 @@ export default function HeadChat({
   onPermission,
   needsFirstCommit,
   onFirstCommit,
+  tools,
+  model,
+  mic,
 }: Props) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -182,21 +191,33 @@ export default function HeadChat({
               onStop();
             }
           }}
-          placeholder={busy ? "Working… (Esc to stop)" : "What should the fleet do?"}
-          rows={3}
-          spellCheck={false}
+          placeholder={busy ? "Working… (Esc to stop)" : "What should we build?"}
+          rows={2}
         />
-        {busy ? (
-          // While the head agent works, the send button is the way out. Stopping keeps
-          // the conversation: the next message carries on from here.
-          <button className="stop" onClick={onStop} title="Stop this turn (Esc)">
-            Stop
-          </button>
-        ) : (
-          <button onClick={submit} disabled={!draft.trim()}>
-            Send
-          </button>
-        )}
+        <div className="composer-bar">
+          <div className="composer-tools">{tools}</div>
+          {model && (
+            <span className="composer-model" title="The head agent's model (change the default in Settings)">
+              {model}
+            </span>
+          )}
+          {mic}
+          {busy ? (
+            // While the head agent works, the send button is the way out. Stopping keeps
+            // the conversation: the next message carries on from here.
+            <button className="send stop" onClick={onStop} title="Stop this turn (Esc)" aria-label="Stop">
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
+                <rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor" />
+              </svg>
+            </button>
+          ) : (
+            <button className="send" onClick={submit} disabled={!draft.trim()} title="Send (Enter)" aria-label="Send">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
     </section>
   );

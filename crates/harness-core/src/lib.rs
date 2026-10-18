@@ -9,6 +9,7 @@
 //! `harness-cli` drives the identical engine from a terminal, so the whole loop is
 //! testable without a desktop.
 
+pub mod account;
 pub mod agents;
 pub mod autonomy;
 pub mod availability;

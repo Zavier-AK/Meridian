@@ -140,7 +140,7 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
          about to do first, and delegate real work. If they say no, do not look for \
          another way round it.\n\
          - Workers need a repository with at least one commit. If the project has none, \
-         tell the person to use “Make the first commit” in Harness rather than delegating.\n\
+         tell the person to use “Make the first commit” in Meridian rather than delegating.\n\
          - Report back concisely: what you delegated, what came back, what needs a decision."
     )
 }

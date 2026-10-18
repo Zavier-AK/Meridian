@@ -13,6 +13,11 @@ type Props = {
   onDecide: (id: string, approve: boolean, text?: string) => void;
   collapsed: boolean;
   onToggle: () => void;
+  /** Which side of the panel is showing: the workers, or the changes they made. */
+  mode: "workers" | "changes";
+  onMode: (mode: "workers" | "changes") => void;
+  /** The changes overview, shown in place of the workers. */
+  changes: React.ReactNode;
 };
 
 /** Statuses a stop can still act on. */
@@ -47,6 +52,9 @@ export default function WorkerRail({
   onDecide,
   collapsed,
   onToggle,
+  mode,
+  onMode,
+  changes,
 }: Props) {
   if (collapsed) {
     // Folded to a strip that still says whether anything is running or waiting on you.
@@ -81,10 +89,24 @@ export default function WorkerRail({
   return (
     <aside className="rail">
       <div className="rail-head">
-        <h2>Workers</h2>
-        <button className="link" onClick={onChangeFleet}>
-          Change fleet
-        </button>
+        <div className="rail-tabs" role="tablist" aria-label="Side panel">
+          <button
+            role="tab"
+            aria-selected={mode === "workers"}
+            className={mode === "workers" ? "active" : ""}
+            onClick={() => onMode("workers")}
+          >
+            Workers
+          </button>
+          <button
+            role="tab"
+            aria-selected={mode === "changes"}
+            className={mode === "changes" ? "active" : ""}
+            onClick={() => onMode("changes")}
+          >
+            Changes
+          </button>
+        </div>
         <button
           className="rail-toggle"
           onClick={onToggle}
@@ -96,7 +118,16 @@ export default function WorkerRail({
         </button>
       </div>
 
-      <h3 className="first">Detected</h3>
+      {mode === "changes" ? (
+        changes
+      ) : (
+        <>
+      <div className="rail-subhead">
+        <h3 className="first">Detected</h3>
+        <button className="link" onClick={onChangeFleet}>
+          Change fleet
+        </button>
+      </div>
       <ul className="backend-inventory">
         {backends.map((backend) => (
           <li key={backend.id} title={backend.message}>
@@ -237,6 +268,8 @@ export default function WorkerRail({
         </button>
         </div>
         ),
+      )}
+        </>
       )}
     </aside>
   );

@@ -430,13 +430,13 @@ pub(crate) async fn set_up_git(root: &std::path::Path) -> Result<bool, String> {
     }
     run_git(root, &["add", "-A"]).await?;
     // A Mac that has never committed has no name or email set; git refuses rather than
-    // guess. Sign this one commit as Harness instead of failing on it.
+    // guess. Sign this one commit as Meridian instead of failing on it.
     let named = run_git(root, &["config", "user.email"]).await.is_ok();
     let mut args = Vec::new();
     if !named {
         args.extend([
             "-c",
-            "user.name=Harness",
+            "user.name=Meridian",
             "-c",
             "user.email=harness@localhost",
         ]);
@@ -1215,6 +1215,93 @@ struct PullRequestView {
     status: Option<harness_core::publish::PrStatus>,
 }
 
+/// Every change to the code this session knows of, file by file, for the changes sidebar.
+#[tauri::command]
+async fn changes_overview(
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<Vec<harness_core::engine::ChangeGroup>, String> {
+    Ok(harness_for(&state, project).await?.changes_overview().await)
+}
+
+/// Which `claude` Meridian runs and whether it's signed in, as the app itself sees it.
+#[tauri::command]
+async fn claude_account() -> harness_core::account::ClaudeAccount {
+    harness_core::account::claude_account().await
+}
+
+/// Sign in again: open Terminal on `claude auth login`, with the same `claude` Meridian
+/// runs, so the sign-in lands where the agents will look for it.
+#[tauri::command]
+async fn claude_sign_in() -> Result<(), String> {
+    let path = harness_core::account::claude_path()
+        .ok_or("the Claude CLI isn't on the PATH Meridian sees")?;
+    if !cfg!(target_os = "macos") {
+        return Err(format!("run `{} auth login` in a terminal", path.display()));
+    }
+    let script = sign_in_script(&path.display().to_string());
+    let out = tokio::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .await
+        .map_err(|e| format!("could not open Terminal: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// The AppleScript that opens Terminal on `<claude> auth login`: the path quoted for the
+/// shell, then the whole command quoted for AppleScript.
+fn sign_in_script(claude: &str) -> String {
+    let shell = format!("'{}' auth login", claude.replace('\'', "'\\''"));
+    format!(
+        "tell application \"Terminal\"\n activate\n do script \"{}\"\nend tell",
+        shell.replace('\\', "\\\\").replace('"', "\\\"")
+    )
+}
+
+/// Restart the head agent's Claude process, carrying on the same conversation. A process
+/// that has been up for hours can hold a sign-in token another Claude process has since
+/// refreshed; a fresh one reads the current sign-in.
+#[tauri::command]
+async fn reconnect_head(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<(), String> {
+    let key = key_for(&state, project).await?;
+    let mut projects = state.projects.lock().await;
+    let session = projects
+        .get_mut(&key)
+        .ok_or("no session for that project")?;
+    if let Head::Live(orchestrator) = std::mem::replace(&mut session.head, Head::Suspended) {
+        if let Err(error) = orchestrator.shutdown().await {
+            tracing::warn!("head agent did not shut down cleanly: {error:#}");
+        }
+    }
+    session.harness.set_extras(current_extras()).await;
+    let resume = session
+        .harness
+        .resumable_backend_session()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let (orchestrator, events) = Orchestrator::start(
+        Arc::clone(&session.harness),
+        &session.project_root,
+        session.model.clone(),
+        Some(settings::load().max_turns),
+        resume,
+        hook_command(),
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))?;
+    forward_events(app, Arc::clone(&session.harness), key, events);
+    session.head = Head::Live(Box::new(orchestrator));
+    Ok(())
+}
+
 /// Open a pull request's page.
 #[tauri::command]
 async fn open_link(url: String) -> Result<(), String> {
@@ -1914,6 +2001,10 @@ pub fn run() {
             make_first_commit,
             answer_permission,
             revise_worker,
+            changes_overview,
+            claude_account,
+            claude_sign_in,
+            reconnect_head,
             pull_request_plan,
             open_pull_request,
             pull_request_status,
@@ -1992,6 +2083,15 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sign_in_command_survives_odd_paths() {
+        let script = sign_in_script("/Users/z/My \"Apps\"/it's/claude");
+        assert_eq!(
+            script,
+            "tell application \"Terminal\"\n activate\n do script \"'/Users/z/My \\\"Apps\\\"/it'\\\\''s/claude' auth login\"\nend tell"
+        );
+    }
 
     #[tokio::test]
     async fn a_new_folder_gets_git_and_a_first_commit_without_harness_files() {

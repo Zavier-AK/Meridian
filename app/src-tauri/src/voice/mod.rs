@@ -550,7 +550,7 @@ pub fn create_hud(app: &AppHandle) -> tauri::Result<()> {
         HUD_LABEL,
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title("Harness voice")
+    .title("Meridian voice")
     .inner_size(HUD_WIDTH, 280.0)
     .resizable(false)
     .decorations(false)
@@ -1665,7 +1665,7 @@ async fn in_window(app: &AppHandle, action: VoiceAction) -> Result<Option<String
         Ok(Ok(result)) => result,
         _ => {
             voice.runs.lock().expect("not poisoned").remove(&id);
-            Err("the Harness window didn't answer".into())
+            Err("the Meridian window didn't answer".into())
         }
     }
 }

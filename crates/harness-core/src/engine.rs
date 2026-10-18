@@ -110,6 +110,18 @@ struct Landed {
     at: std::time::Instant,
 }
 
+/// One source of changes to the code, for the changes sidebar: a worker's branch (still
+/// working, waiting for review, or landed) or the checkout's own uncommitted edits.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChangeGroup {
+    /// `None` for the checkout's uncommitted edits.
+    pub worker_id: Option<String>,
+    pub role: Option<String>,
+    /// `working`, `review`, `landed`, `kept` (finished, not proposed) or `uncommitted`.
+    pub state: &'static str,
+    pub files: Vec<crate::isolation::FileChange>,
+}
+
 /// Where a proposed merge's checks stand.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -625,6 +637,7 @@ impl Harness {
             isolation: role.isolation.as_str().to_string(),
             cwd: workspace.cwd.display().to_string(),
             number: 0,
+            task: task.to_string(),
         })
         .await;
 
@@ -987,6 +1000,7 @@ impl Harness {
             isolation: "worktree".into(),
             cwd: String::new(),
             number: 0,
+            task: String::new(),
         })
         .await;
         self.record(HarnessEvent::WorkerFinished {
@@ -2116,6 +2130,72 @@ impl Harness {
         }
     }
 
+    /// Every change to the code this session knows of, file by file: what each worker has
+    /// on its branch (or is writing right now), what landed, and what's uncommitted in the
+    /// checkout. Discarded work isn't listed.
+    pub async fn changes_overview(&self) -> Vec<ChangeGroup> {
+        let workers = self.workers().await;
+        let landed = self.landed.read().await.clone();
+        let pending = self.pending_merges.read().await.clone();
+        let discarded = self.discarded.read().await.clone();
+        let mut groups = Vec::new();
+        for worker in workers {
+            if discarded.contains(&worker.id) {
+                continue;
+            }
+            let (state, files) = if let Some(landed) = landed.get(&worker.id) {
+                (
+                    "landed",
+                    self.workspaces
+                        .merge_files(&landed.commit)
+                        .await
+                        .unwrap_or_default(),
+                )
+            } else if !worker.status.is_terminal() {
+                (
+                    "working",
+                    self.workspaces
+                        .worktree_files(&worker.id)
+                        .await
+                        .unwrap_or_default(),
+                )
+            } else if let Some(branch) = &worker.branch {
+                (
+                    if pending.contains_key(&worker.id) {
+                        "review"
+                    } else {
+                        "kept"
+                    },
+                    self.workspaces
+                        .branch_files(branch)
+                        .await
+                        .unwrap_or_default(),
+                )
+            } else {
+                continue;
+            };
+            if files.is_empty() {
+                continue;
+            }
+            groups.push(ChangeGroup {
+                worker_id: Some(worker.id.clone()),
+                role: Some(worker.role.clone()),
+                state,
+                files,
+            });
+        }
+        let uncommitted = self.workspaces.checkout_files().await.unwrap_or_default();
+        if !uncommitted.is_empty() {
+            groups.push(ChangeGroup {
+                worker_id: None,
+                role: None,
+                state: "uncommitted",
+                files: uncommitted,
+            });
+        }
+        groups
+    }
+
     /// How many times a worker's change has been sent back.
     pub async fn revision_count(&self, worker_id: &str) -> u32 {
         self.revisions
@@ -2438,6 +2518,7 @@ impl Harness {
             isolation: isolation.as_str().to_string(),
             cwd: cwd.display().to_string(),
             number: 0,
+            task: description.to_string(),
         })
         .await;
     }
