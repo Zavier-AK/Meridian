@@ -3,6 +3,10 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import VoiceHud from "./VoiceHud";
 import "./styles.css";
+import { applyFont, rememberedFont } from "./fonts";
+
+// The last pairing chosen, before settings arrive, so the first paint is already in it.
+applyFont(rememberedFont());
 
 /** The push-to-talk bar is a second window on the same bundle, told apart by its label. */
 function isVoiceBar(): boolean {

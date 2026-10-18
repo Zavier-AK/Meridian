@@ -108,6 +108,50 @@ pub struct Patch {
     pub total_lines: usize,
 }
 
+/// One file's share of a change.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct FileChange {
+    pub path: String,
+    pub insertions: usize,
+    pub deletions: usize,
+    /// Binary files have no line counts.
+    pub binary: bool,
+    /// Not in the repository before this change.
+    pub added: bool,
+}
+
+/// `git diff --numstat` output, file by file.
+fn parse_numstat(numstat: &str) -> Vec<FileChange> {
+    numstat
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            let added = fields.next()?;
+            let removed = fields.next()?;
+            let path = fields.next()?.to_string();
+            Some(FileChange {
+                binary: added == "-",
+                insertions: added.parse().unwrap_or(0),
+                deletions: removed.parse().unwrap_or(0),
+                path,
+                added: false,
+            })
+        })
+        .collect()
+}
+
+/// Mark the files a diff adds, from `--name-status` output.
+fn mark_added(changes: &mut [FileChange], name_status: &str) {
+    for line in name_status.lines() {
+        if let Some(path) = line.strip_prefix("A\t") {
+            if let Some(change) = changes.iter_mut().find(|c| c.path == path) {
+                change.added = true;
+            }
+        }
+    }
+}
+
 /// A prepared workspace, held for as long as the worker runs.
 ///
 /// Dropping the handle does not clean up — teardown is explicit via [`Workspace::release`]
@@ -402,7 +446,7 @@ impl Workspaces {
                 if base == "HEAD" && !has_commits(&self.project_root).await {
                     bail!(
                         "this repository has no commits yet, so a worker has nothing to \
-                         branch from. Make the first commit (Harness offers a button for \
+                         branch from. Make the first commit (Meridian offers a button for \
                          it), then try again"
                     );
                 }
@@ -713,6 +757,84 @@ impl Workspaces {
         Ok(stat)
     }
 
+    /// File by file, what a branch changes relative to where it left the checkout.
+    pub async fn branch_files(&self, branch: &str) -> Result<Vec<FileChange>> {
+        harness_branch(branch)?;
+        let range = format!("HEAD...{branch}");
+        let mut files =
+            parse_numstat(&git(&self.project_root, &["diff", "--numstat", &range]).await?);
+        mark_added(
+            &mut files,
+            &git(&self.project_root, &["diff", "--name-status", &range]).await?,
+        );
+        Ok(files)
+    }
+
+    /// File by file, what a landed merge brought in.
+    pub async fn merge_files(&self, commit: &str) -> Result<Vec<FileChange>> {
+        if !commit.chars().all(|c| c.is_ascii_hexdigit()) || commit.len() < 7 {
+            bail!("`{commit}` is not a commit id");
+        }
+        let parent = format!("{commit}^1");
+        let mut files =
+            parse_numstat(&git(&self.project_root, &["diff", "--numstat", &parent, commit]).await?);
+        mark_added(
+            &mut files,
+            &git(
+                &self.project_root,
+                &["diff", "--name-status", &parent, commit],
+            )
+            .await?,
+        );
+        Ok(files)
+    }
+
+    /// What a running worker has changed so far, read without touching its index: tracked
+    /// files only, since a file it just created isn't known to git until it's committed.
+    pub async fn worktree_files(&self, worker_id: &str) -> Result<Vec<FileChange>> {
+        if worker_id.contains('/') || worker_id.contains("..") {
+            bail!("`{worker_id}` is not a worker id");
+        }
+        let path = self.project_root.join(WORKTREE_DIR).join(worker_id);
+        if !path.is_dir() {
+            return Ok(Vec::new());
+        }
+        Ok(parse_numstat(
+            &git(&path, &["diff", "--numstat", "HEAD"]).await?,
+        ))
+    }
+
+    /// Uncommitted changes in the checkout itself — the head agent's own edits, or the
+    /// person's. New files are counted by their lines.
+    pub async fn checkout_files(&self) -> Result<Vec<FileChange>> {
+        let mut files =
+            parse_numstat(&git(&self.project_root, &["diff", "--numstat", "HEAD"]).await?);
+        let untracked = git(
+            &self.project_root,
+            &["ls-files", "--others", "--exclude-standard"],
+        )
+        .await?;
+        for path in untracked.lines().filter(|p| !p.trim().is_empty()).take(500) {
+            let full = self.project_root.join(path);
+            let (lines, binary) = match tokio::fs::metadata(&full).await {
+                Ok(meta) if meta.len() <= 1_000_000 => match tokio::fs::read(&full).await {
+                    Ok(bytes) if bytes.contains(&0) => (0, true),
+                    Ok(bytes) => (bytes.iter().filter(|b| **b == b'\n').count(), false),
+                    Err(_) => (0, false),
+                },
+                _ => (0, true),
+            };
+            files.push(FileChange {
+                path: path.to_string(),
+                insertions: lines,
+                deletions: 0,
+                binary,
+                added: true,
+            });
+        }
+        Ok(files)
+    }
+
     /// Drop a branch whose work was rejected.
     pub async fn discard(&self, branch: &str) -> Result<()> {
         if !branch.starts_with(&format!("{BRANCH_PREFIX}/")) {
@@ -800,6 +922,53 @@ mod tests {
 
         assert!(workspaces.reopen("../x", "harness/w-again").await.is_err());
         assert!(workspaces.reopen("w-x", "main").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn changes_are_counted_file_by_file() {
+        let (dir, workspaces) = scratch_repo().await;
+        let worker = workspaces
+            .prepare("w-count", Isolation::Worktree)
+            .await
+            .unwrap();
+        tokio::fs::write(worker.cwd.join("README.md"), "base\nmore\nand more\n")
+            .await
+            .unwrap();
+        // Running: only the tracked file is visible so far.
+        let live = workspaces.worktree_files("w-count").await.unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!((live[0].insertions, live[0].deletions), (2, 0));
+
+        tokio::fs::write(worker.cwd.join("new.txt"), "a\nb\nc\n")
+            .await
+            .unwrap();
+        worker.commit("work").await.unwrap();
+        worker.release().await.unwrap();
+        let files = workspaces.branch_files("harness/w-count").await.unwrap();
+        let new = files.iter().find(|f| f.path == "new.txt").unwrap();
+        assert_eq!((new.insertions, new.added), (3, true));
+        assert!(!files.iter().find(|f| f.path == "README.md").unwrap().added);
+
+        let commit = workspaces.merge("harness/w-count").await.unwrap();
+        let landed = workspaces.merge_files(&commit).await.unwrap();
+        assert_eq!(landed.len(), 2);
+        assert!(workspaces.merge_files("HEAD; rm").await.is_err());
+
+        // Uncommitted edits in the checkout, new files included.
+        tokio::fs::write(dir.path().join("README.md"), "changed\n")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("draft.md"), "one\ntwo\n")
+            .await
+            .unwrap();
+        let mut here = workspaces.checkout_files().await.unwrap();
+        here.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(here.len(), 2);
+        assert_eq!(here[0].path, "README.md");
+        assert_eq!(
+            (here[1].path.as_str(), here[1].insertions, here[1].added),
+            ("draft.md", 2, true)
+        );
     }
 
     #[tokio::test]

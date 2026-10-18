@@ -29,7 +29,7 @@ export type HarnessEvent =
   | { type: "thinking"; run_id: string; text: string }
   | { type: "tool_call"; run_id: string; tool_use_id: string; name: string; input: unknown }
   | { type: "tool_result"; run_id: string; tool_use_id: string; content: string; is_error: boolean }
-  | { type: "worker_spawned"; worker_id: string; role: string; provider: string; model: string | null; isolation: string; cwd: string; number?: number }
+  | { type: "worker_spawned"; worker_id: string; role: string; provider: string; model: string | null; isolation: string; cwd: string; number?: number; task?: string }
   | { type: "worker_status_changed"; worker_id: string; status: WorkerStatus }
   | { type: "worker_finished"; worker_id: string; summary: string; usage: Usage; diff: DiffStat | null; is_error: boolean }
   | { type: "merge_requested"; worker_id: string; branch: string; diff: DiffStat }
@@ -50,6 +50,7 @@ export type HarnessEvent =
   | { type: "api_retry"; run_id: string; attempt: number; max_retries: number; retry_delay_ms: number; error: string }
   | { type: "run_finished"; run_id: string; text: string; usage: Usage; cost_usd: number | null; is_error: boolean }
   | { type: "error"; run_id: string; message: string }
+  | { type: "sign_in_problem"; run_id: string; message: string }
   | { type: "turn_interrupted"; run_id: string }
   | { type: "permission_request"; run_id: string; request_id: string; tool: string; description: string; input: unknown; rules: string[] }
   | { type: "permission_resolved"; run_id: string; request_id: string; allowed: boolean }
@@ -384,6 +385,8 @@ export type AppSettings = {
   max_turns: number;
   notifications: boolean;
   accent: string | null;
+  /** A pairing from `fonts.ts`. */
+  font: string;
   voice: VoiceSettings;
 };
 
@@ -604,4 +607,43 @@ export type VoiceProgress = {
   file: string | null;
   received: number;
   total: number | null;
+};
+
+/** Mirrors `isolation::FileChange`. */
+export type FileChange = {
+  path: string;
+  insertions: number;
+  deletions: number;
+  binary: boolean;
+  added: boolean;
+};
+
+/** Mirrors `engine::ChangeGroup`: one worker's changes, or the checkout's uncommitted ones. */
+export type ChangeGroup = {
+  worker_id: string | null;
+  role: string | null;
+  state: "working" | "review" | "kept" | "landed" | "uncommitted";
+  files: FileChange[];
+};
+
+/** Mirrors `account::ClaudeAccount`. */
+export type ClaudeAccount = {
+  path: string | null;
+  version: string | null;
+  logged_in: boolean;
+  method: string | null;
+  problem: string | null;
+};
+
+/** Something that moved between two parts of the system, for the flow view. */
+export type Flow = {
+  at: number;
+  /** Node ids: "you", "head", "branch", "github", or a worker id. */
+  from: string;
+  to: string;
+  fromLabel: string;
+  toLabel: string;
+  kind: "message" | "reply" | "task" | "result" | "review" | "checks" | "landed" | "undone" | "revision" | "pr" | "ask";
+  text: string;
+  workerId?: string;
 };

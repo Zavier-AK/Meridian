@@ -2000,7 +2000,7 @@ async fn a_pull_request_pushes_the_workers_branch() {
     assert!(plan
         .suggested
         .remote_branch
-        .starts_with("harness/local-builder-"));
+        .starts_with("meridian/local-builder-"));
     assert!(plan.suggested.body.contains("pr.txt"));
     assert!(plan.remote.as_ref().unwrap().github.is_none());
 
@@ -2025,4 +2025,50 @@ async fn a_pull_request_pushes_the_workers_branch() {
     assert!(drain(&mut f.events)
         .iter()
         .any(|e| matches!(e, HarnessEvent::PullRequestOpened { .. })));
+}
+
+#[tokio::test]
+async fn the_changes_overview_follows_work_from_review_to_landed() {
+    let f = fixture().await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:feature.txt:one\ntwo\n", vec![])
+        .await
+        .unwrap();
+    f.harness.request_merge(&record.id).await.unwrap();
+    tokio::fs::write(f.root.join("scratch.md"), "note\n")
+        .await
+        .unwrap();
+
+    let groups = f.harness.changes_overview().await;
+    let worker = groups
+        .iter()
+        .find(|g| g.worker_id.as_deref() == Some(record.id.as_str()))
+        .unwrap();
+    assert_eq!(worker.state, "review");
+    assert_eq!(worker.files[0].path, "feature.txt");
+    assert!(worker.files[0].added);
+    let here = groups.iter().find(|g| g.worker_id.is_none()).unwrap();
+    assert_eq!(
+        (here.state, here.files[0].path.as_str()),
+        ("uncommitted", "scratch.md")
+    );
+
+    for _ in 0..200 {
+        if !matches!(
+            f.harness.verification(&record.id).await,
+            Some(harness_core::engine::VerificationState::Running { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    f.harness.approve_merge(&record.id).await.unwrap();
+    let groups = f.harness.changes_overview().await;
+    let worker = groups
+        .iter()
+        .find(|g| g.worker_id.as_deref() == Some(record.id.as_str()))
+        .unwrap();
+    assert_eq!(worker.state, "landed");
+    assert_eq!(worker.files[0].path, "feature.txt");
 }

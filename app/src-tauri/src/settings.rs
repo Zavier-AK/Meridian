@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 const FILE: &str = "settings.json";
 
+/// The type pairings the app bundles (see `fonts.ts`). The first is the default.
+pub const FONTS: &[&str] = &["grotesk", "geist", "plex", "editorial", "manrope", "system"];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -20,6 +23,8 @@ pub struct Settings {
     pub notifications: bool,
     /// Accent colour as `#rrggbb`. `None` keeps the theme's own.
     pub accent: Option<String>,
+    /// The type pairing, one of [`FONTS`].
+    pub font: String,
     /// Push-to-talk.
     pub voice: crate::voice::VoiceSettings,
 }
@@ -31,6 +36,7 @@ impl Default for Settings {
             max_turns: 200,
             notifications: true,
             accent: None,
+            font: FONTS[0].to_string(),
             voice: crate::voice::VoiceSettings::default(),
         }
     }
@@ -66,6 +72,14 @@ impl Settings {
             if !valid {
                 return Err(format!("`{accent}` is not a #rrggbb colour"));
             }
+        }
+        self.font = self.font.trim().to_lowercase();
+        if !FONTS.contains(&self.font.as_str()) {
+            return Err(format!(
+                "`{}` isn't one of the fonts: {}",
+                self.font,
+                FONTS.join(", ")
+            ));
         }
         self.voice = self.voice.validated()?;
         Ok(self)
@@ -123,6 +137,7 @@ mod tests {
             max_turns: 80,
             notifications: false,
             accent: Some("#e0567a".into()),
+            font: "plex".into(),
             voice: crate::voice::VoiceSettings {
                 enabled: true,
                 confidence: 0.8,
@@ -152,6 +167,10 @@ mod tests {
             },
             Settings {
                 accent: Some("red".into()),
+                ..Default::default()
+            },
+            Settings {
+                font: "comic-sans".into(),
                 ..Default::default()
             },
             Settings {

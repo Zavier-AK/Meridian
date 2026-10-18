@@ -1,5 +1,6 @@
 import type { AppSettings } from "./types";
 import { setNotificationsEnabled } from "./notify";
+import { applyFont } from "./fonts";
 
 /**
  * Apply settings that live in the page rather than the engine.
@@ -9,6 +10,7 @@ import { setNotificationsEnabled } from "./notify";
  */
 export function applySettings(settings: AppSettings): void {
   setNotificationsEnabled(settings.notifications);
+  applyFont(settings.font);
 
   const root = document.documentElement.style;
   const accent = settings.accent;

@@ -31,6 +31,10 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
         "accent",
         "a colour: #rrggbb, pink, blue, green, orange, purple, red, teal, yellow, or default",
     ),
+    (
+        "font",
+        "grotesk (Space Grotesk, the default), geist, plex (IBM Plex), editorial (Fraunces and Inter), manrope or system",
+    ),
     ("voice.enabled", "on or off (off stops voice)"),
     ("voice.hotkey", "e.g. Alt+Space"),
     ("voice.stt_model", "tiny, base or small"),
@@ -74,6 +78,27 @@ fn number<T: std::str::FromStr>(value: &str) -> Result<T, String> {
         .map_err(|_| format!("“{value}” isn't a number"))
 }
 
+/// A font pairing by id or by the name people say: "space grotesk", "IBM Plex", "default".
+fn font(value: &str) -> Result<String, String> {
+    let said = value.trim().to_lowercase();
+    let id = match said.as_str() {
+        "default" | "" => settings::FONTS[0],
+        "space grotesk" | "space" => "grotesk",
+        "ibm plex" | "ibm" => "plex",
+        "fraunces" | "serif" | "inter" => "editorial",
+        "sf" | "san francisco" | "mac" => "system",
+        other => other,
+    };
+    if settings::FONTS.contains(&id) {
+        Ok(id.to_string())
+    } else {
+        Err(format!(
+            "`{value}` isn't one of the fonts: {}",
+            settings::FONTS.join(", ")
+        ))
+    }
+}
+
 fn accent(value: &str) -> Result<Option<String>, String> {
     let value = value.trim().to_lowercase();
     let named = match value.as_str() {
@@ -111,6 +136,7 @@ pub fn apply_setting(s: &mut settings::Settings, key: &str, value: &str) -> Resu
         "max_turns" => s.max_turns = number(value)?,
         "notifications" => s.notifications = flag(value)?,
         "accent" => s.accent = accent(value)?,
+        "font" => s.font = font(value)?,
         "voice.enabled" => v.enabled = flag(value)?,
         "voice.hotkey" => v.hotkey = text,
         "voice.stt_model" => {
@@ -173,6 +199,7 @@ fn setting_value(s: &settings::Settings, key: &str) -> String {
         "max_turns" => s.max_turns.to_string(),
         "notifications" => on(s.notifications),
         "accent" => s.accent.clone().unwrap_or_else(|| "default".into()),
+        "font" => s.font.clone(),
         "voice.enabled" => on(v.enabled),
         "voice.hotkey" => v.hotkey.clone(),
         "voice.stt_model" => v.stt_model.as_str().trim_end_matches(".en").to_string(),
@@ -519,6 +546,11 @@ mod tests {
         assert!(apply_setting(&mut s, "notifications", "maybe").is_err());
         assert!(apply_setting(&mut s, "voice.speech_voice", "Daniel Craig").is_err());
         assert!(apply_setting(&mut s, "accent", "url(javascript:x)").is_err());
+        apply_setting(&mut s, "font", "Space Grotesk").unwrap();
+        assert_eq!(s.font, "grotesk");
+        apply_setting(&mut s, "font", "default").unwrap();
+        assert_eq!(s.font, "grotesk");
+        assert!(apply_setting(&mut s, "font", "comic sans").is_err());
         assert!(apply_setting(&mut s, "no.such", "1").is_err());
         // Every key listed can be read back.
         for (key, _) in SETTING_KEYS {

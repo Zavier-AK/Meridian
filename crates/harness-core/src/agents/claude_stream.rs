@@ -112,6 +112,28 @@ fn quota_windows(info: &Value) -> Vec<crate::quota::QuotaWindow> {
     out.into_iter().map(|(_, window)| window).collect()
 }
 
+/// Whether a turn failed because the CLI's sign-in did: an expired or revoked token, or a
+/// refresh that was refused. Matched only on the CLI's own error shapes, so a model talking
+/// about OAuth in someone's code isn't mistaken for it.
+pub fn looks_like_sign_in_failure(text: &str, is_error: bool) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let api_error = lower.starts_with("api error: 401")
+        || lower.starts_with("failed to authenticate")
+        || lower.contains("\"type\":\"authentication_error\"");
+    let said = [
+        "oauth token has expired",
+        "could not be refreshed",
+        "oauth token refresh failed",
+        "please run /login",
+        "invalid bearer token",
+        "not logged in",
+        "invalid api key",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    api_error || (is_error && said)
+}
+
 pub fn parse_line(run_id: &str, line: &str) -> Result<ParsedLine, String> {
     let line = line.trim();
     if line.is_empty() {
@@ -436,12 +458,18 @@ pub fn parse_line(run_id: &str, line: &str) -> Result<ParsedLine, String> {
             };
 
             out.events.push(HarnessEvent::RunFinished {
-                run_id: key,
+                run_id: key.clone(),
                 text: summary.text.clone(),
                 usage: summary.usage,
                 cost_usd: summary.cost_usd,
                 is_error: summary.is_error,
             });
+            if looks_like_sign_in_failure(&summary.text, summary.is_error) {
+                out.events.push(HarnessEvent::SignInProblem {
+                    run_id: key,
+                    message: summary.text.chars().take(400).collect(),
+                });
+            }
             out.result = Some(summary);
         }
 
@@ -762,6 +790,31 @@ mod tests {
     }
 
     /// Captured from the real CLI (2.1.285) with `--permission-prompt-tool stdio`.
+    #[test]
+    fn a_failed_sign_in_is_recognised_and_nothing_else_is() {
+        assert!(looks_like_sign_in_failure(
+            "API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth token has expired.\"}}",
+            true
+        ));
+        assert!(looks_like_sign_in_failure(
+            "OAuth token refresh failed: the token could not be refreshed. Please run /login",
+            true
+        ));
+        // A model discussing OAuth in the person's code is not a sign-in failure.
+        assert!(!looks_like_sign_in_failure(
+            "I added a check for when the OAuth token has expired and could not be refreshed.",
+            false
+        ));
+        assert!(!looks_like_sign_in_failure("Rate limited", true));
+
+        let line = r#"{"type":"result","subtype":"success","is_error":true,"result":"API Error: 401 OAuth token has expired","session_id":"s"}"#;
+        let parsed = parse_line("r", line).unwrap();
+        assert!(parsed
+            .events
+            .iter()
+            .any(|e| matches!(e, HarnessEvent::SignInProblem { .. })));
+    }
+
     #[test]
     fn a_permission_request_becomes_an_event_and_a_pending_answer() {
         let line = r#"{"type":"control_request","request_id":"e3bc","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"touch made-by-test.txt","description":"Create empty file made-by-test.txt"},"description":"Create empty file made-by-test.txt","permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"touch made-by-test.txt"}],"behavior":"allow","destination":"localSettings"},{"type":"addDirectories","directories":["/tmp/x"],"destination":"session"},{"type":"setMode","mode":"acceptEdits","destination":"session"}],"blocked_path":"/tmp/x/made-by-test.txt","tool_use_id":"toolu_1"}}"#;

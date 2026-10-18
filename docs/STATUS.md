@@ -1,4 +1,4 @@
-# local-harness — project status
+# Meridian (local-harness) — project status
 
 _Last updated: 30 September 2026_
 
@@ -174,7 +174,7 @@ output can merge anything.
     **Not verified here:** real sites (Amazon, Gmail), Google sign-in inside the
     automated window (flags that usually allow it are set), Contacts lookup, and the app's
     Stop button on a real run.
-  - **All of Harness by voice.** Asked to make a new project, the voice agent said it
+  - **All of Meridian by voice.** Asked to make a new project, the voice agent said it
     couldn't: it had tools only for workers, merges, plans, the night shift and the
     Mac. Now it covers every part of the app with a button:
     - projects (new, open, close), sending to Claude when told, which model each role
@@ -243,6 +243,12 @@ output can merge anything.
   and that returned awaiting approval. Auto-landing, its refusals, undo and conflict
   abort are covered by engine tests.
 
+- **Meridian UI** — the flow tab, the changes panel, the chat bar with its autonomy
+  slider (dragged headlessly: it set Land safe), the typeface picker (each pairing applied
+  and rendered) and the sign-in panel were rendered against a stubbed bridge. The changes
+  overview (pending, landed, live and uncommitted, per file) and sign-in failure detection
+  are covered by engine tests; `claude auth status` was read from the real CLI. Reconnect
+  reuses the same start-with-resume path as switching projects.
 - **Sending work back** — live against the real CLI (haiku builder): the first pass picked
   an animal and wrote it to a file; sent back with "without reading any file, write the
   animal you picked into recall.txt", the second pass resumed the conversation in the

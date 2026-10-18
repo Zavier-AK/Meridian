@@ -190,7 +190,7 @@ pub async fn gh_state(project: &Path) -> GhState {
     }
 }
 
-/// A branch name for the remote: `harness/<role>-<first words of the task>`.
+/// A branch name for the remote: `meridian/<role>-<first words of the task>`.
 pub fn suggest_branch(role: &str, task: &str) -> String {
     let words: Vec<String> = task
         .split(|c: char| !c.is_ascii_alphanumeric())
@@ -208,7 +208,7 @@ pub fn suggest_branch(role: &str, task: &str) -> String {
             }
         })
         .collect();
-    let mut name = format!("harness/{}", role.trim_matches('-'));
+    let mut name = format!("meridian/{}", role.trim_matches('-'));
     if !words.is_empty() {
         name.push('-');
         name.push_str(&words.join("-"));
@@ -226,7 +226,7 @@ pub fn suggest_title(task: &str) -> String {
         .lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
-        .unwrap_or("Changes from Harness");
+        .unwrap_or("Changes from Meridian");
     let mut title: String = line.chars().take(72).collect();
     if title.len() < line.len() {
         title.push('…');
@@ -267,7 +267,7 @@ pub fn suggest_body(
             body.push_str(&format!("- {}: {}\n", check.name, check.summary));
         }
     }
-    body.push_str("\n\n---\n_Made with Harness._\n");
+    body.push_str("\n\n---\n_Made with Meridian._\n");
     body
 }
 
@@ -474,9 +474,9 @@ mod tests {
     fn suggestions_are_tidy() {
         assert_eq!(
             suggest_branch("builder", "Add retries to the fetcher, with backoff!"),
-            "harness/builder-add-retries-to-the-fetcher-with"
+            "meridian/builder-add-retries-to-the-fetcher-with"
         );
-        assert_eq!(suggest_branch("Test Writer", ""), "harness/test-writer");
+        assert_eq!(suggest_branch("Test Writer", ""), "meridian/test-writer");
         assert!(suggest_branch("b", &"word ".repeat(40)).len() <= 60);
         assert_eq!(
             suggest_title("\n  Fix the login bug\nmore detail"),

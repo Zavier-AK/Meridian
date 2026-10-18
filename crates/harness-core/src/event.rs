@@ -117,6 +117,9 @@ pub enum HarnessEvent {
         /// the event, so every spawn path gets one.
         #[serde(default)]
         number: u32,
+        /// What it was asked to do.
+        #[serde(default)]
+        task: String,
     },
     WorkerStatusChanged {
         worker_id: String,
@@ -315,6 +318,12 @@ pub enum HarnessEvent {
         run_id: String,
         message: String,
     },
+    /// A Claude run failed because its sign-in did (expired, revoked, refresh refused).
+    /// Follows that run's `RunFinished`.
+    SignInProblem {
+        run_id: String,
+        message: String,
+    },
 }
 
 impl HarnessEvent {
@@ -336,7 +345,8 @@ impl HarnessEvent {
             | Self::SubagentFinished { run_id, .. }
             | Self::UserMessage { run_id, .. }
             | Self::RunFinished { run_id, .. }
-            | Self::Error { run_id, .. } => run_id,
+            | Self::Error { run_id, .. }
+            | Self::SignInProblem { run_id, .. } => run_id,
             Self::WorkerSpawned { worker_id, .. }
             | Self::WorkerStatusChanged { worker_id, .. }
             | Self::WorkerFinished { worker_id, .. }

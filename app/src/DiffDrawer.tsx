@@ -490,9 +490,9 @@ function LineComment({
 const GH_NOTE: Record<PrPlan["gh"], string> = {
   ready: "Opens it on GitHub with the GitHub CLI.",
   signed_out:
-    "The GitHub CLI isn't signed in (`gh auth login`), so Harness pushes the branch and opens GitHub's page to finish it.",
+    "The GitHub CLI isn't signed in (`gh auth login`), so Meridian pushes the branch and opens GitHub's page to finish it.",
   missing:
-    "Harness pushes the branch and opens GitHub's page to finish it. Install the GitHub CLI (`brew install gh`) to open it directly.",
+    "Meridian pushes the branch and opens GitHub's page to finish it. Install the GitHub CLI (`brew install gh`) to open it directly.",
 };
 
 /** Push the branch and open a pull request — or, once open, where it stands. */

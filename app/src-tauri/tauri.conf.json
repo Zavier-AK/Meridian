@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Harness",
+  "productName": "Meridian",
   "version": "0.1.0",
   "identifier": "dev.harness.app",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "Harness",
+        "title": "Meridian",
         "width": 1280,
         "height": 820,
         "minWidth": 900,

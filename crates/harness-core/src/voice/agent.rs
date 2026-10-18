@@ -75,13 +75,13 @@ pub trait Hands: Send + Sync + 'static {
     fn inventory(&self, topic: String) -> BoxFuture<'static, String>;
 }
 
-pub const BRIEF: &str = "You are the voice assistant built into Harness, a coding app on the person's Mac. The person just spoke to you. Their words come from speech recognition and may contain small errors, so read them generously.
+pub const BRIEF: &str = "You are the voice assistant built into Meridian, a coding app on the person's Mac. The person just spoke to you. Their words come from speech recognition and may contain small errors, so read them generously.
 
 Do what they asked with your tools, one step at a time, in the order they said it. Several requests in one sentence are several tool calls. Fill in sensible details yourself, such as the text of a note or the wording of a reminder, instead of asking.
 
 Requests about code, the project, bugs, features, tests or programming are for the coding agent, not you. For those, call put_in_chat_box with their request, cleaned up but in their words, and do nothing else for that part. Only when they clearly say to send it now (“send it”, “tell Claude to … and send it”, “go ahead and ask Claude”) call send_to_coding_agent instead. Never try to do coding work yourself.
 
-You can run every part of Harness itself: open, create and close projects; show any view; change which model a role uses; open or reload the preview; turn skills and MCP servers on or off, add or remove them, import skills; change settings; set up or start the night shift; and everything about workers, merges and plans. When you need the exact name of a skill, MCP server, role or setting, call harness_info first rather than guessing.
+You can run every part of Meridian itself: open, create and close projects; show any view; change which model a role uses; open or reload the preview; turn skills and MCP servers on or off, add or remove them, import skills; change settings; set up or start the night shift; and everything about workers, merges and plans. When you need the exact name of a skill, MCP server, role or setting, call harness_info first rather than guessing.
 
 Some actions (merging, discarding or undoing a change, approving or declining a delegation, stopping work, running or dropping a plan, raising autonomy) wait for the person's yes. When a tool says it asked, stop there and tell them it is waiting for their yes.
 
@@ -898,7 +898,7 @@ impl VoiceTools {
 
     #[tool(
         name = "harness_info",
-        description = "Look up part of Harness by name: its skills, MCP servers, roles and their models, settings, or open projects."
+        description = "Look up part of Meridian by name: its skills, MCP servers, roles and their models, settings, or open projects."
     )]
     async fn harness_info(&self, Parameters(p): Parameters<InfoParams>) -> String {
         self.hands.inventory(p.topic.to_lowercase()).await
@@ -906,7 +906,7 @@ impl VoiceTools {
 
     #[tool(
         name = "open_project",
-        description = "Open a folder as a project in Harness (or switch to it if it's open). A folder without a fleet gets the default one."
+        description = "Open a folder as a project in Meridian (or switch to it if it's open). A folder without a fleet gets the default one."
     )]
     async fn open_project(&self, Parameters(p): Parameters<PathParams>) -> String {
         self.run(VoiceAction::OpenProject { path: p.path }).await
@@ -914,7 +914,7 @@ impl VoiceTools {
 
     #[tool(
         name = "new_project",
-        description = "Make a new project: a new folder with a git repository and the default fleet, opened in Harness."
+        description = "Make a new project: a new folder with a git repository and the default fleet, opened in Meridian."
     )]
     async fn new_project(&self, Parameters(p): Parameters<NewProjectParams>) -> String {
         self.run(VoiceAction::NewProject {
@@ -926,7 +926,7 @@ impl VoiceTools {
 
     #[tool(
         name = "close_project",
-        description = "Close a project in Harness, stopping its coding agent and workers. Asks the person first."
+        description = "Close a project in Meridian, stopping its coding agent and workers. Asks the person first."
     )]
     async fn close_project(&self, Parameters(p): Parameters<MaybeProjectParams>) -> String {
         let project = match p.name {
@@ -970,7 +970,7 @@ impl VoiceTools {
 
     #[tool(
         name = "preview",
-        description = "Show a local web address (localhost) in Harness's preview, or reload it."
+        description = "Show a local web address (localhost) in Meridian's preview, or reload it."
     )]
     async fn preview(&self, Parameters(p): Parameters<PreviewParams>) -> String {
         self.run(VoiceAction::Preview { url: p.url }).await
@@ -994,7 +994,7 @@ impl VoiceTools {
 
     #[tool(
         name = "import_skills",
-        description = "Import skills from a git repository into Harness. Asks first."
+        description = "Import skills from a git repository into Meridian. Asks first."
     )]
     async fn import_skills(&self, Parameters(p): Parameters<RepoParams>) -> String {
         self.run(VoiceAction::ImportSkills { url: p.url }).await
@@ -1031,7 +1031,7 @@ impl VoiceTools {
 
     #[tool(
         name = "change_setting",
-        description = "Change one Harness setting by key (harness_info settings lists the keys and current values)."
+        description = "Change one Meridian setting by key (harness_info settings lists the keys and current values)."
     )]
     async fn change_setting(&self, Parameters(p): Parameters<SettingParams>) -> String {
         self.run(VoiceAction::SetSetting {
