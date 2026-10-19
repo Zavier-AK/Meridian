@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const FILE: &str = "settings.json";
+/// The OpenRouter key, kept apart from the settings so it never travels with them.
+const OPENROUTER_KEY_FILE: &str = "openrouter.key";
+/// How many OpenRouter models the fleet editor offers; its catalog runs to hundreds.
+const MAX_OPENROUTER_MODELS: usize = 40;
 
 /// The type pairings the app bundles (see `fonts.ts`). The first is the default.
 pub const FONTS: &[&str] = &["grotesk", "geist", "plex", "editorial", "manrope", "system"];
@@ -27,6 +31,8 @@ pub struct Settings {
     pub font: String,
     /// Push-to-talk.
     pub voice: crate::voice::VoiceSettings,
+    /// OpenRouter models offered when a role is reassigned, e.g. `qwen/qwen3-coder`.
+    pub openrouter_models: Vec<String>,
 }
 
 impl Default for Settings {
@@ -38,6 +44,7 @@ impl Default for Settings {
             accent: None,
             font: FONTS[0].to_string(),
             voice: crate::voice::VoiceSettings::default(),
+            openrouter_models: Vec::new(),
         }
     }
 }
@@ -82,6 +89,24 @@ impl Settings {
             ));
         }
         self.voice = self.voice.validated()?;
+        let mut models: Vec<String> = Vec::new();
+        for model in self.openrouter_models.iter().map(|m| m.trim()) {
+            if model.is_empty() || models.iter().any(|m| m == model) {
+                continue;
+            }
+            if !harness_core::openrouter::valid_slug(model) {
+                return Err(format!(
+                    "`{model}` isn't an OpenRouter model id — they look like vendor/model"
+                ));
+            }
+            models.push(model.to_string());
+        }
+        if models.len() > MAX_OPENROUTER_MODELS {
+            return Err(format!(
+                "at most {MAX_OPENROUTER_MODELS} OpenRouter models can be offered"
+            ));
+        }
+        self.openrouter_models = models;
         Ok(self)
     }
 }
@@ -110,6 +135,60 @@ pub fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+fn openrouter_key_path() -> Option<PathBuf> {
+    Some(harness_core::extensions::app_data_dir()?.join(OPENROUTER_KEY_FILE))
+}
+
+pub fn load_openrouter_key() -> Option<String> {
+    openrouter_key_path().and_then(|path| load_key_from(&path))
+}
+
+pub fn save_openrouter_key(key: Option<&str>) -> Result<(), String> {
+    let path = openrouter_key_path().ok_or("no home directory to keep the key in")?;
+    save_key_to(&path, key)
+}
+
+fn load_key_from(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|key| !key.is_empty())
+}
+
+/// Readable by this user alone. `None` removes it.
+fn save_key_to(path: &Path, key: Option<&str>) -> Result<(), String> {
+    let Some(key) = key else {
+        return match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        };
+    };
+    let key = key.trim();
+    let plausible = !key.is_empty()
+        && key.len() <= 300
+        && key.chars().all(|c| c.is_ascii_graphic());
+    if !plausible {
+        return Err("that doesn't look like an API key".into());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension(format!("key.{}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    {
+        use std::io::Write;
+        let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+        file.write_all(key.as_bytes()).map_err(|e| e.to_string())?;
+    }
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
@@ -143,6 +222,7 @@ mod tests {
                 confidence: 0.8,
                 ..Default::default()
             },
+            openrouter_models: vec!["qwen/qwen3-coder".into()],
         };
         save_to(&path, &settings).unwrap();
         assert_eq!(load_from(&path), settings);
@@ -181,6 +261,14 @@ mod tests {
                 default_model: Some("has space".into()),
                 ..Default::default()
             },
+            Settings {
+                openrouter_models: vec!["--model".into()],
+                ..Default::default()
+            },
+            Settings {
+                openrouter_models: vec!["no-vendor".into()],
+                ..Default::default()
+            },
         ];
         for settings in bad {
             assert!(settings.clone().validated().is_err(), "{settings:?}");
@@ -190,5 +278,42 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(blank.validated().unwrap().default_model, None);
+
+        let models = Settings {
+            openrouter_models: vec![
+                " qwen/qwen3-coder ".into(),
+                "qwen/qwen3-coder".into(),
+                "".into(),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            models.validated().unwrap().openrouter_models,
+            ["qwen/qwen3-coder"]
+        );
+    }
+
+    #[test]
+    fn the_openrouter_key_is_kept_private_and_can_be_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(OPENROUTER_KEY_FILE);
+        assert_eq!(load_key_from(&path), None);
+
+        save_key_to(&path, Some("  sk-or-v1-abc \n")).unwrap();
+        assert_eq!(load_key_from(&path).as_deref(), Some("sk-or-v1-abc"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        assert!(save_key_to(&path, Some("has space")).is_err());
+        assert!(save_key_to(&path, Some("")).is_err());
+
+        save_key_to(&path, None).unwrap();
+        assert_eq!(load_key_from(&path), None);
+        // Removing what isn't there is fine.
+        save_key_to(&path, None).unwrap();
     }
 }

@@ -17,7 +17,7 @@ one of them authenticates with the OAuth token its CLI already holds.
 │  harness-core      the engine — no GUI dependency              │
 │    orchestrator    one long-lived `claude -p` process          │
 │    mcp             axum + rmcp, loopback, bearer-token gated   │
-│    agents          claude │ codex │ openai_compat │ mock       │
+│    agents          claude │ codex │ openai_compat │ openrouter │
 │    isolation       worktree │ readonly │ shared │ none         │
 │    store           SQLite: sessions, runs, events, usage       │
 └───────────────────────────────────────────────────────────────┘
@@ -739,6 +739,59 @@ cargo run -p harness-cli -- roles
 `wire_api` is worth a try both ways — `"chat"` for `/v1/chat/completions`, `"responses"`
 for `/v1/responses`. Which one a given server speaks varies, and the 2026 Codex docs
 default to `responses` while most Ollama-compatible endpoints still want `chat`.
+
+## OpenRouter
+
+[OpenRouter](https://openrouter.ai) serves hundreds of models from many labs (Kimi,
+Qwen, DeepSeek, GLM, GPT, Gemini and Claude among them) behind one API key. A role can run on
+any of them. **This is the one backend that isn't covered by a subscription**: every call
+is billed per token to your OpenRouter account. Nothing moves onto OpenRouter unless you
+put a role there.
+
+**Set it up.** Settings → OpenRouter:
+- paste your key, then **Save key**; **Check** shows what the key has spent and its limit;
+- add the models you want to offer roles. The box searches OpenRouter's catalog and shows
+  each model's price and whether it supports tool use.
+
+Then **Change fleet** offers those models to your roles.
+
+The key is stored in Meridian's data folder, readable by your user only, and is given to
+OpenRouter roles alone. Every other agent has `OPENROUTER_API_KEY` stripped from its
+environment. If you'd rather not save it, set `OPENROUTER_API_KEY` in the environment
+Meridian (or `harness-cli`) starts from.
+
+**Roles that work on code** run the `claude` CLI pointed at OpenRouter's
+Anthropic-compatible endpoint (the route OpenRouter documents for Claude Code). The
+model gets Claude Code's tools, permission prompts, worktrees, review and send-back, all
+unchanged:
+
+```toml
+[roles.kimi_builder]
+provider  = "openrouter"
+model     = "moonshotai/kimi-k2"            # any OpenRouter model id
+isolation = "worktree"
+tools     = ["Read", "Edit", "Write", "Bash"]
+```
+
+The CLI's background calls and any subagents it starts use the same model, so nothing is
+quietly billed to a different one. Pick a model that supports tool use: Claude Code is
+built around tools, and OpenRouter notes it works best with Anthropic models. Others vary.
+
+**Text-only roles** (`isolation = "none"`) are a plain chat completion with the key
+attached:
+
+```toml
+[roles.summarizer]
+provider  = "openai_compat"
+base_url  = "https://openrouter.ai/api/v1"
+model     = "google/gemini-2.5-flash"
+isolation = "none"
+```
+
+The budget meter counts OpenRouter on its own line. Text-only calls show what OpenRouter
+charged. For roles that work on code, the CLI's own dollar figure assumes Claude prices,
+so only tokens are shown; [openrouter.ai/activity](https://openrouter.ai/activity) has the
+real bill.
 
 ## Testing
 

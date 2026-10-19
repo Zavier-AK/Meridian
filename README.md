@@ -13,7 +13,8 @@ instead of API billing, and local models cost nothing.
 
 - **Delegates in parallel.** Ask for a change; the head agent splits it up and hands the
   pieces to workers — builders, testers, reviewers — each in its own worktree on its own
-  branch. Claude, Codex and local models (Ollama, LM Studio) can all be workers.
+  branch. Claude, Codex and local models (Ollama, LM Studio) can all be workers, and so can
+  any [OpenRouter](docs/GUIDE.md#openrouter) model, on a per-token key.
 - **Nothing lands without review.** Every change is checked (your tests, an AI reviewer)
   and given a risk level. Then merge it (with undo), discard it, comment on its lines and
   **send it back** for another pass, or **open a pull request**.
@@ -77,7 +78,7 @@ cargo run -p harness-cli -- chat "Plan the change, then delegate it."
 Meridian (Tauri + React)
 └── harness-core — the engine, no GUI
     ├── head agent: one long-lived `claude` process with delegation tools (MCP, loopback only)
-    ├── workers: claude │ codex │ local models — each in a git worktree, read-only checkout, or none
+    ├── workers: claude │ codex │ local models │ OpenRouter — each in a git worktree, read-only checkout, or none
     ├── checks: your commands + an AI reviewer → a risk level per change
     └── SQLite: sessions, runs, events, usage
 ```
@@ -85,7 +86,8 @@ Meridian (Tauri + React)
 The head agent is a single `claude` process for the whole conversation, so its context is
 paid for once, not on every message (measured: turn 1 created 39,306 cached tokens, turn 2
 just 906). API keys are stripped from every agent's environment, so they always use their
-CLI's subscription sign-in.
+CLI's subscription sign-in. The one exception is a role you put on OpenRouter, which gets
+your OpenRouter key and nothing else.
 
 ## More
 
@@ -98,6 +100,7 @@ CLI's subscription sign-in.
   [autonomy](docs/GUIDE.md#how-much-runs-without-you),
   [voice](docs/GUIDE.md#talk-to-it),
   [local models](docs/GUIDE.md#attaching-a-local-model),
+  [OpenRouter](docs/GUIDE.md#openrouter),
   [sign-in problems](docs/GUIDE.md#when-claudes-sign-in-fails).
 - **[Project status](docs/STATUS.md)** — what's verified, what isn't, and what's next.
 

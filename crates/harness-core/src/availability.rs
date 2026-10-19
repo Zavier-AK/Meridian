@@ -127,7 +127,30 @@ pub async fn probe_in_path(role: &Role, path_value: &OsStr) -> Availability {
             }
         }
 
+        Provider::Openrouter => {
+            if !binary_in_path("claude", path_value) {
+                return Availability::no(
+                    "OpenRouter roles run through the `claude` CLI, which is not on PATH — install Claude Code",
+                );
+            }
+            if crate::openrouter::api_key().is_none() {
+                return Availability::no(
+                    "no OpenRouter key — add one in Settings → OpenRouter, or set OPENROUTER_API_KEY",
+                );
+            }
+            Availability::yes()
+        }
+
         Provider::OpenaiCompat => match &role.base_url {
+            Some(base_url) if crate::openrouter::is_openrouter_url(base_url) => {
+                if crate::openrouter::api_key().is_none() {
+                    Availability::no(
+                        "no OpenRouter key — add one in Settings → OpenRouter, or set OPENROUTER_API_KEY",
+                    )
+                } else {
+                    Availability::yes()
+                }
+            }
             Some(base_url) => {
                 let root = base_url.trim_end_matches('/').trim_end_matches("/v1");
                 probe_server(root, "the local model server", role.model.as_deref()).await

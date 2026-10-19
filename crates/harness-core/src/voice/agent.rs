@@ -233,9 +233,10 @@ pub struct SendParams {
 pub struct RoleModelParams {
     /// The role, e.g. "builder".
     pub role: String,
-    /// The model, e.g. "opus", "sonnet", "haiku", or a local model's name.
+    /// The model, e.g. "opus", "sonnet", "haiku", a local model's name, or an OpenRouter
+    /// id such as "qwen/qwen3-coder".
     pub model: String,
-    /// The backend: "claude", "codex" or "openai_compat". Leave out to keep it.
+    /// The backend: "claude", "codex", "openai_compat" or "openrouter". Leave out to keep it.
     #[serde(default)]
     pub provider: Option<String>,
 }

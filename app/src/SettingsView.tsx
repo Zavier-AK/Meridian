@@ -5,6 +5,7 @@ import type { AppSettings, VoiceSettings } from "./types";
 import VoiceSettingsPanel from "./VoiceSettings";
 import { FONTS, applyFont } from "./fonts";
 import SignInPanel from "./SignInPanel";
+import OpenRouterSettings from "./OpenRouterSettings";
 
 type Props = {
   onSaved: (settings: AppSettings) => void;
@@ -132,6 +133,11 @@ export default function SettingsView({ onSaved, onClose }: Props) {
         <h3>Claude sign-in</h3>
         <SignInPanel problem={null} inline />
       </div>
+
+      <OpenRouterSettings
+        models={settings.openrouter_models ?? []}
+        onChange={(openrouter_models) => update({ openrouter_models })}
+      />
 
       <div className="settings-section">
         <h3>Typeface</h3>

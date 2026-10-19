@@ -50,7 +50,7 @@ pub struct RunOutcome {
 /// Run a worker to completion, streaming events as they arrive.
 pub async fn run_worker(spec: &WorkerSpec, sink: &EventSink) -> Result<RunOutcome> {
     match spec.role.provider {
-        Provider::Claude => claude::run(spec, sink).await,
+        Provider::Claude | Provider::Openrouter => claude::run(spec, sink).await,
         Provider::Codex => codex::run(spec, sink).await,
         Provider::OpenaiCompat => openai_compat::run(spec, sink).await,
         Provider::Mock => mock::run(spec, sink).await,
@@ -84,9 +84,12 @@ pub fn compose_prompt(spec: &WorkerSpec) -> String {
 ///
 /// This is load-bearing, not hygiene. With `ANTHROPIC_API_KEY` set, the CLI bills the API;
 /// without it, the CLI falls back to the OAuth token from `claude /login` and the call is
-/// covered by the subscription. Same reasoning for the Codex/OpenAI keys.
+/// covered by the subscription. Same reasoning for the Codex/OpenAI keys. The OpenRouter
+/// key goes too: it is spent only by the roles the person put on OpenRouter.
 pub fn scrub_api_keys(cmd: &mut tokio::process::Command) {
     for key in [
+        "ANTHROPIC_BASE_URL",
+        crate::openrouter::KEY_VARIABLE,
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_API_KEY",
@@ -157,6 +160,8 @@ mod tests {
             .collect();
         assert!(removed.contains(&"ANTHROPIC_API_KEY".to_string()));
         assert!(removed.contains(&"OPENAI_API_KEY".to_string()));
-        assert_eq!(removed.len(), 5);
+        assert!(removed.contains(&"OPENROUTER_API_KEY".to_string()));
+        assert!(removed.contains(&"ANTHROPIC_BASE_URL".to_string()));
+        assert_eq!(removed.len(), 7);
     }
 }

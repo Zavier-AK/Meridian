@@ -16,6 +16,9 @@ pub enum Provider {
     Codex,
     /// Raw OpenAI-compatible chat completions. No agent loop, no tools, near-zero latency.
     OpenaiCompat,
+    /// The `claude` CLI pointed at OpenRouter: any model it serves, with Claude Code's
+    /// agent loop. Billed per token to the OpenRouter key, not a subscription.
+    Openrouter,
     /// Deterministic stand-in so the orchestration loop is testable without a network.
     Mock,
 }
@@ -26,8 +29,14 @@ impl Provider {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::OpenaiCompat => "openai_compat",
+            Self::Openrouter => "openrouter",
             Self::Mock => "mock",
         }
+    }
+
+    /// Whether workers run as the `claude` CLI, and so take its flags and can be resumed.
+    pub fn runs_claude_cli(&self) -> bool {
+        matches!(self, Self::Claude | Self::Openrouter)
     }
 }
 
@@ -108,6 +117,19 @@ pub struct Role {
 }
 
 impl Role {
+    /// Who bills this role's usage, as the budget meter groups it: OpenRouter for any
+    /// role that calls it, whichever way, otherwise the provider itself.
+    pub fn billed_as(&self) -> &'static str {
+        let openrouter_url = self
+            .base_url
+            .as_deref()
+            .is_some_and(crate::openrouter::is_openrouter_url);
+        match self.provider {
+            Provider::OpenaiCompat if openrouter_url => Provider::Openrouter.as_str(),
+            provider => provider.as_str(),
+        }
+    }
+
     /// The role's allow-list, minus anything its isolation mode forbids.
     pub fn effective_tools(&self) -> Vec<String> {
         if self.isolation == Isolation::Readonly {
@@ -312,6 +334,18 @@ impl RoleRegistry {
                     role.isolation.as_str()
                 );
             }
+            if role.provider == Provider::Openrouter {
+                match role.model.as_deref() {
+                    None => bail!(
+                        "role `{name}` uses openrouter but names no model; set model to an \
+                         OpenRouter id such as \"qwen/qwen3-coder\""
+                    ),
+                    Some(model) if !crate::openrouter::valid_slug(model) => bail!(
+                        "role `{name}`: `{model}` is not an OpenRouter model id (vendor/model)"
+                    ),
+                    Some(_) => {}
+                }
+            }
             if let Some(fallback) = &role.fallback_role {
                 if !self.roles.contains_key(fallback) {
                     bail!("role `{name}` falls back to `{fallback}`, which is not defined");
@@ -444,6 +478,34 @@ isolation = "none"
         )
         .unwrap_err();
         assert!(err.to_string().contains("no filesystem access"), "{err}");
+    }
+
+    #[test]
+    fn an_openrouter_role_needs_a_model_id() {
+        let ok = RoleRegistry::from_toml(
+            r#"
+            [roles.builder]
+            provider = "openrouter"
+            model = "qwen/qwen3-coder"
+            "#,
+        )
+        .unwrap();
+        let builder = ok.get("builder").unwrap();
+        assert_eq!(builder.provider, Provider::Openrouter);
+        assert!(builder.provider.runs_claude_cli());
+        assert_eq!(builder.isolation, Isolation::Worktree);
+
+        let missing = RoleRegistry::from_toml("[roles.x]\nprovider = \"openrouter\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("names no model"), "{missing}");
+
+        let flag = RoleRegistry::from_toml(
+            "[roles.x]\nprovider = \"openrouter\"\nmodel = \"--dangerously\"\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(flag.contains("not an OpenRouter model id"), "{flag}");
     }
 
     #[test]

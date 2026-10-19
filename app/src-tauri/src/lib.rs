@@ -1748,9 +1748,62 @@ fn save_settings(
     let settings = settings.validated()?;
     let path = settings::path().ok_or("no home directory to keep settings in")?;
     settings::save_to(&path, &settings)?;
+    harness_core::openrouter::set_models(settings.openrouter_models.clone());
     // The hotkey follows the settings at once: turned on, off, or changed.
     voice::apply_hotkey(&app, &settings.voice)?;
     Ok(settings)
+}
+
+// --------------------------------------------------------------- openrouter
+
+#[derive(Serialize)]
+struct OpenRouterStatus {
+    /// Where the key in use comes from, or `None` when there is none.
+    source: Option<harness_core::openrouter::KeySource>,
+    /// Its last few characters.
+    hint: Option<String>,
+}
+
+#[tauri::command]
+fn openrouter_status() -> OpenRouterStatus {
+    let key = harness_core::openrouter::key_with_source();
+    OpenRouterStatus {
+        hint: key
+            .as_ref()
+            .map(|(key, _)| harness_core::openrouter::key_hint(key)),
+        source: key.map(|(_, source)| source),
+    }
+}
+
+/// Saved for this user only, and used from the next run on.
+#[tauri::command]
+fn openrouter_save_key(key: String) -> Result<OpenRouterStatus, String> {
+    settings::save_openrouter_key(Some(&key))?;
+    harness_core::openrouter::set_api_key(Some(key));
+    Ok(openrouter_status())
+}
+
+/// Falls back to `OPENROUTER_API_KEY` if that is set.
+#[tauri::command]
+fn openrouter_remove_key() -> Result<OpenRouterStatus, String> {
+    settings::save_openrouter_key(None)?;
+    harness_core::openrouter::set_api_key(None);
+    Ok(openrouter_status())
+}
+
+#[tauri::command]
+async fn openrouter_check() -> Result<harness_core::openrouter::KeyInfo, String> {
+    let key = harness_core::openrouter::require_key().map_err(|e| e.to_string())?;
+    harness_core::openrouter::check_key(&key)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn openrouter_catalog() -> Result<Vec<harness_core::openrouter::CatalogModel>, String> {
+    harness_core::openrouter::catalog()
+        .await
+        .map_err(|e| format!("{e:#}"))
 }
 
 // ---------------------------------------------------------- tools and skills
@@ -1976,7 +2029,10 @@ pub fn run() {
         .plugin(voice::hotkey_plugin())
         .setup(|app| {
             app.manage(AppState::default());
-            let voice_settings = settings::load().voice;
+            let stored = settings::load();
+            harness_core::openrouter::set_api_key(settings::load_openrouter_key());
+            harness_core::openrouter::set_models(stored.openrouter_models);
+            let voice_settings = stored.voice;
             let voice = voice::Voice::new(&voice_settings);
             let laya = Arc::clone(&voice.laya);
             tauri::async_runtime::spawn(async move { laya.spawn_idle_reaper() });
@@ -2004,6 +2060,11 @@ pub fn run() {
             changes_overview,
             claude_account,
             claude_sign_in,
+            openrouter_status,
+            openrouter_save_key,
+            openrouter_remove_key,
+            openrouter_check,
+            openrouter_catalog,
             reconnect_head,
             pull_request_plan,
             open_pull_request,
