@@ -724,7 +724,7 @@ impl Harness {
                 .record_usage(
                     &self.session_id,
                     &worker_id,
-                    role.provider.as_str(),
+                    role.billed_as(),
                     role.model.as_deref(),
                     &outcome.usage,
                     outcome.cost_usd,
@@ -1745,7 +1745,7 @@ impl Harness {
                             .record_usage(
                                 &self.session_id,
                                 &run_id,
-                                role.provider.as_str(),
+                                role.billed_as(),
                                 role.model.as_deref(),
                                 &usage,
                                 None,
@@ -1940,7 +1940,7 @@ impl Harness {
         self.verifications.write().await.remove(worker_id);
 
         let feedback = crate::revise::feedback(note, comments);
-        let resume = if role.provider == Provider::Claude {
+        let resume = if role.provider.runs_claude_cli() {
             self.store
                 .lock()
                 .await
@@ -2062,7 +2062,7 @@ impl Harness {
                 .record_usage(
                     &self.session_id,
                     &worker_id,
-                    role.provider.as_str(),
+                    role.billed_as(),
                     role.model.as_deref(),
                     &outcome.usage,
                     outcome.cost_usd,

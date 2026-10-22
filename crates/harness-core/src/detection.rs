@@ -100,7 +100,47 @@ pub async fn detect_backends() -> Vec<DetectedBackend> {
         detect_openai_backend("ollama", "Ollama", OLLAMA_URL),
     );
 
-    vec![claude, codex, lm_studio, ollama]
+    let openrouter = openrouter_backend(
+        crate::openrouter::key_with_source().map(|(_, source)| source),
+        &crate::openrouter::models(),
+    );
+
+    vec![claude, codex, lm_studio, ollama, openrouter]
+}
+
+/// OpenRouter as a backend: ready once there is a key, offering the models the person
+/// chose in Settings — its catalog runs to hundreds, too many to offer every role.
+fn openrouter_backend(
+    key: Option<crate::openrouter::KeySource>,
+    models: &[String],
+) -> DetectedBackend {
+    use crate::openrouter::KeySource;
+    let chosen = match models.len() {
+        0 => "no models chosen yet — add some in Settings → OpenRouter".to_string(),
+        1 => "1 model chosen".to_string(),
+        n => format!("{n} models chosen"),
+    };
+    DetectedBackend {
+        id: "openrouter".into(),
+        label: "OpenRouter".into(),
+        available: key.is_some(),
+        message: match key {
+            Some(KeySource::Saved) => format!("OpenRouter key saved — {chosen}"),
+            Some(KeySource::Environment) => {
+                format!("OpenRouter key from OPENROUTER_API_KEY — {chosen}")
+            }
+            None => "OpenRouter: no key — add one in Settings → OpenRouter (billed per token)"
+                .into(),
+        },
+        base_url: Some(crate::openrouter::API_BASE.into()),
+        models: models
+            .iter()
+            .map(|id| DetectedModel {
+                id: id.clone(),
+                capability: "chat".into(),
+            })
+            .collect(),
+    }
 }
 
 pub async fn inspect_fleet(registry: &RoleRegistry) -> FleetInspection {
@@ -238,10 +278,16 @@ fn configurable_roles(
                 // OpenAI-compatible endpoints can serve it.
                 _ if role.isolation == Isolation::None => {
                     let mut options = local_chat_options(backends);
+                    options.extend(backend_options(
+                        backends,
+                        "openrouter",
+                        Provider::OpenaiCompat.as_str(),
+                    ));
                     options.retain(|option| option.provider == Provider::OpenaiCompat.as_str());
-                    let reason = options
-                        .is_empty()
-                        .then(|| "No compatible local chat models were detected".into());
+                    let reason = options.is_empty().then(|| {
+                        "No local chat models were detected, and no OpenRouter models are set up"
+                            .into()
+                    });
                     (options, reason)
                 }
 
@@ -252,6 +298,7 @@ fn configurable_roles(
                     let mut options =
                         backend_options(backends, "claude", Provider::Claude.as_str());
                     options.extend(codex_options(backends));
+                    options.extend(openrouter_agent_options(backends));
                     let reason = options.is_empty().then(|| {
                         "Neither the Claude nor the Codex CLI is available, so this role \
                          cannot be reassigned"
@@ -310,6 +357,22 @@ fn codex_options(backends: &[DetectedBackend]) -> Vec<ModelOption> {
         }
     }
     options
+}
+
+/// OpenRouter models with Claude Code's agent loop, which needs the `claude` CLI.
+fn openrouter_agent_options(backends: &[DetectedBackend]) -> Vec<ModelOption> {
+    if !backends.iter().any(|b| b.id == "claude" && b.available) {
+        return Vec::new();
+    }
+    backend_options(backends, "openrouter", Provider::Openrouter.as_str())
+        .into_iter()
+        .map(|option| ModelOption {
+            id: format!("agent:{}", option.id),
+            // The CLI is told where OpenRouter is; the role keeps no URL of its own.
+            base_url: None,
+            ..option
+        })
+        .collect()
 }
 
 fn backend_options(
@@ -406,6 +469,7 @@ fn parse_provider(name: &str) -> anyhow::Result<Provider> {
         "claude" => Ok(Provider::Claude),
         "codex" => Ok(Provider::Codex),
         "openai_compat" => Ok(Provider::OpenaiCompat),
+        "openrouter" => Ok(Provider::Openrouter),
         "mock" => Ok(Provider::Mock),
         other => anyhow::bail!("unknown provider `{other}`"),
     }
@@ -542,6 +606,70 @@ mod tests {
                 .any(|o| o.provider == "claude"),
             "a Codex builder should be able to move back onto Claude"
         );
+    }
+
+    #[test]
+    fn openrouter_models_are_offered_as_agents_or_as_chat_by_what_the_role_needs() {
+        use crate::openrouter::{KeySource, API_BASE};
+        let chosen = vec!["qwen/qwen3-coder".to_string()];
+        let claude = DetectedBackend {
+            id: "claude".into(),
+            label: "Claude CLI".into(),
+            available: true,
+            message: String::new(),
+            base_url: None,
+            models: Vec::new(),
+        };
+        let backends = vec![
+            claude.clone(),
+            openrouter_backend(Some(KeySource::Saved), &chosen),
+        ];
+        let roles = configurable_roles(&registry(), &backends);
+        let options_for = |name: &str| {
+            roles
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap()
+                .options
+                .clone()
+        };
+
+        // A builder gets Claude Code's loop on the OpenRouter model, and keeps no URL:
+        // the CLI is pointed at OpenRouter when it starts.
+        let agent = options_for("builder")
+            .into_iter()
+            .find(|o| o.provider == "openrouter")
+            .expect("a builder should be offered OpenRouter models");
+        assert_eq!(agent.model, "qwen/qwen3-coder");
+        assert_eq!(agent.base_url, None);
+        assert!(apply_to_role(
+            registry().get("builder").unwrap(),
+            &RoleModelPatch {
+                role_name: "builder".into(),
+                model: agent.model.clone(),
+                base_url: None,
+                provider: Some(agent.provider.clone()),
+                provider_opts: Default::default(),
+            },
+        )
+        .is_ok());
+
+        // A text-only role gets a plain chat completion against OpenRouter.
+        let chat = options_for("local");
+        assert_eq!(chat.len(), 1);
+        assert_eq!(chat[0].provider, "openai_compat");
+        assert_eq!(chat[0].base_url.as_deref(), Some(API_BASE));
+
+        // No key: nothing offered, and the backend says how to add one.
+        let keyless = openrouter_backend(None, &chosen);
+        assert!(!keyless.available);
+        assert!(keyless.message.contains("Settings"));
+        let roles = configurable_roles(&registry(), &[claude, keyless]);
+        assert!(roles
+            .iter()
+            .flat_map(|r| &r.options)
+            .all(|o| o.provider != "openrouter"
+                && o.base_url.as_deref() != Some(API_BASE)));
     }
 
     #[test]

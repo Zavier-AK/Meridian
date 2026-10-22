@@ -1,5 +1,5 @@
 //! Raw OpenAI-compatible chat completions — Ollama (`:11434/v1`) and LM Studio
-//! (`:1234/v1`) both speak this.
+//! (`:1234/v1`) both speak this, and so does OpenRouter, which gets the person's key.
 //!
 //! No tool loop and no filesystem: this backend is for work that is pure text in, text
 //! out (summarize, classify, draft, second-opinion). Anything that needs tools goes
@@ -33,24 +33,34 @@ pub async fn run(spec: &WorkerSpec, sink: &EventSink) -> Result<RunOutcome> {
         "stream": false,
     });
 
-    let response = reqwest::Client::new()
-        .post(&endpoint)
-        .json(&body)
-        .send()
-        .await
-        .with_context(|| format!("POST {endpoint} — is the local model server running?"))?;
+    // The key goes to OpenRouter's own host and to nothing else.
+    let openrouter = crate::openrouter::is_openrouter_url(base_url);
+    let mut request = reqwest::Client::new().post(&endpoint).json(&body);
+    if openrouter {
+        request = request
+            .bearer_auth(crate::openrouter::require_key()?)
+            .header("X-Title", "Meridian");
+    }
+
+    let response = request.send().await.with_context(|| {
+        if openrouter {
+            format!("POST {endpoint} — is this machine online?")
+        } else {
+            format!("POST {endpoint} — is the local model server running?")
+        }
+    })?;
 
     let status = response.status();
     let payload: Value = response
         .json()
         .await
-        .context("decoding the local model's response")?;
+        .context("decoding the model server's response")?;
 
     if !status.is_success() {
         let message = payload
             .pointer("/error/message")
             .and_then(Value::as_str)
-            .unwrap_or("local model server returned an error")
+            .unwrap_or("the model server returned an error")
             .to_string();
         let _ = sink.send(HarnessEvent::Error {
             run_id: spec.run_id.clone(),
@@ -77,6 +87,12 @@ pub async fn run(spec: &WorkerSpec, sink: &EventSink) -> Result<RunOutcome> {
         })
         .unwrap_or_default();
 
+    // Local inference is free, and a dollar figure there would be noise in the meter.
+    // OpenRouter reports what the call actually cost.
+    let cost_usd = openrouter
+        .then(|| payload.pointer("/usage/cost").and_then(Value::as_f64))
+        .flatten();
+
     let _ = sink.send(HarnessEvent::AssistantText {
         run_id: spec.run_id.clone(),
         text: text.clone(),
@@ -87,15 +103,14 @@ pub async fn run(spec: &WorkerSpec, sink: &EventSink) -> Result<RunOutcome> {
         run_id: spec.run_id.clone(),
         text: text.clone(),
         usage,
-        // Local inference is free; a dollar figure here would be noise in the meter.
-        cost_usd: None,
+        cost_usd,
         is_error: false,
     });
 
     Ok(RunOutcome {
         text,
         usage,
-        cost_usd: None,
+        cost_usd,
         backend_session_id: None,
         is_error: false,
         cancelled: false,

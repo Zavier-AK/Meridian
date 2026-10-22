@@ -388,6 +388,30 @@ export type AppSettings = {
   /** A pairing from `fonts.ts`. */
   font: string;
   voice: VoiceSettings;
+  /** OpenRouter models offered in the fleet editor, e.g. `qwen/qwen3-coder`. */
+  openrouter_models: string[];
+};
+
+export type OpenRouterStatus = {
+  source: "saved" | "environment" | null;
+  /** The key's last few characters. */
+  hint: string | null;
+};
+
+export type OpenRouterKeyInfo = {
+  label: string | null;
+  usage: number | null;
+  limit: number | null;
+  free_tier: boolean;
+};
+
+export type OpenRouterCatalogModel = {
+  id: string;
+  name: string;
+  context_length: number | null;
+  prompt_per_million: number | null;
+  completion_per_million: number | null;
+  tools: boolean;
 };
 
 /** What the head agent's CLI reported about MCP servers when it last started. */

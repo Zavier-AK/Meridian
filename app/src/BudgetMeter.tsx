@@ -6,10 +6,20 @@ type Props = { usage: UsageRow[]; rateLimited: boolean; onOpenLimits: () => void
  * Burn over the rolling five-hour window, which is the constraint that actually binds a
  * Pro subscription. Dollar figures are shown only where they mean something: under
  * subscription auth the CLI's cost estimate is notional, and local inference is free.
+ * OpenRouter is the exception, billed per token, so it is counted apart.
  */
 export default function BudgetMeter({ usage, rateLimited, onOpenLimits }: Props) {
   const subscription = usage.filter((row) => row.provider === "claude" || row.provider === "codex");
-  const local = usage.filter((row) => row.provider !== "claude" && row.provider !== "codex");
+  const openrouter = usage.filter((row) => row.provider === "openrouter");
+  const local = usage.filter(
+    (row) => row.provider !== "claude" && row.provider !== "codex" && row.provider !== "openrouter",
+  );
+  const openrouterTokens = openrouter.reduce(
+    (sum, row) =>
+      sum + row.input_tokens + row.cache_creation_tokens + row.cache_read_tokens + row.output_tokens,
+    0,
+  );
+  const openrouterCost = openrouter.reduce((sum, row) => sum + (row.cost_usd ?? 0), 0);
 
   const subscriptionTokens = subscription.reduce(
     (sum, row) => sum + row.input_tokens + row.cache_creation_tokens + row.cache_read_tokens,
@@ -43,6 +53,19 @@ export default function BudgetMeter({ usage, rateLimited, onOpenLimits }: Props)
         <span className="meter-label">local</span>
         <span className="mono">{localTokens.toLocaleString()}</span>
       </span>
+
+      {openrouter.length > 0 && (
+        <span
+          className="meter-item"
+          title="Billed per token to your OpenRouter account. The dollar figure counts only calls OpenRouter priced directly; see openrouter.ai/activity for the total."
+        >
+          <span className="meter-label">openrouter</span>
+          <span className="mono">
+            {openrouterTokens.toLocaleString()}
+            {openrouterCost > 0 && ` · $${openrouterCost.toFixed(2)}`}
+          </span>
+        </span>
+      )}
 
       {reusePct !== null && (
         <span className="meter-item" title="Share of context read from cache rather than rebuilt">

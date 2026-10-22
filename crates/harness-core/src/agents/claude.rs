@@ -18,7 +18,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use super::claude_stream::{parse_line, PendingPermission, ResultSummary};
 use super::{compose_prompt, scrub_api_keys, EventSink, RunOutcome, WorkerSpec};
 use crate::event::HarnessEvent;
-use crate::roles::Role;
+use crate::roles::{Provider, Role};
 
 /// Shared argument construction for workers and the orchestrator alike.
 fn base_args(role: &Role, streaming_input: bool, ask_host: bool) -> Vec<String> {
@@ -104,7 +104,9 @@ fn session_args(
     args
 }
 
-fn spawn(cwd: &Path, args: &[String]) -> Result<Child> {
+/// `env` is applied after the scrub, so the only credential a child can hold is one
+/// handed to it here on purpose.
+fn spawn(cwd: &Path, args: &[String], env: &[(&'static str, Option<String>)]) -> Result<Child> {
     let mut cmd = Command::new("claude");
     cmd.args(args)
         .current_dir(cwd)
@@ -114,6 +116,12 @@ fn spawn(cwd: &Path, args: &[String]) -> Result<Child> {
         .kill_on_drop(true);
 
     scrub_api_keys(&mut cmd);
+    for (name, value) in env {
+        match value {
+            Some(value) => cmd.env(name, value),
+            None => cmd.env_remove(name),
+        };
+    }
 
     cmd.spawn()
         .context("spawning `claude` — is the CLI installed and on PATH?")
@@ -136,6 +144,7 @@ async fn pump_stdout(
     child: &mut Child,
     run_id: &str,
     sink: &EventSink,
+    adapt: fn(HarnessEvent) -> Option<HarnessEvent>,
 ) -> Result<Option<ResultSummary>> {
     let stdout = child.stdout.take().context("claude child has no stdout")?;
     let mut lines = BufReader::new(stdout).lines();
@@ -144,7 +153,7 @@ async fn pump_stdout(
     while let Some(line) = lines.next_line().await? {
         match parse_line(run_id, &line) {
             Ok(parsed) => {
-                for event in parsed.events {
+                for event in parsed.events.into_iter().filter_map(adapt) {
                     let _ = sink.send(event);
                 }
                 if let Some(result) = parsed.result {
@@ -175,20 +184,38 @@ pub async fn run(spec: &WorkerSpec, sink: &EventSink) -> Result<RunOutcome> {
         None => args.push(compose_prompt(spec)),
     }
 
-    let mut child = spawn(&spec.cwd, &args)?;
+    // On OpenRouter the same CLI runs against another endpoint with the person's key.
+    let on_openrouter = spec.role.provider == Provider::Openrouter;
+    let (env, adapt): (Vec<_>, fn(HarnessEvent) -> Option<HarnessEvent>) = if on_openrouter {
+        let key = crate::openrouter::require_key()?;
+        let model = spec
+            .role
+            .model
+            .as_deref()
+            .context("an openrouter role needs a model")?;
+        (
+            crate::openrouter::claude_env(&key, model),
+            crate::openrouter::adapt_event,
+        )
+    } else {
+        (Vec::new(), Some)
+    };
+
+    let mut child = spawn(&spec.cwd, &args, &env)?;
     log_stderr(&mut child, spec.run_id.clone());
 
     // Nothing is written to a one-shot worker's stdin; close it so the CLI does not wait.
     drop(child.stdin.take());
 
-    let summary = pump_stdout(&mut child, &spec.run_id, sink).await?;
+    let summary = pump_stdout(&mut child, &spec.run_id, sink, adapt).await?;
     let status = child.wait().await?;
 
     match summary {
         Some(result) => Ok(RunOutcome {
             text: result.text,
             usage: result.usage,
-            cost_usd: result.cost_usd,
+            // Priced by the CLI as if the model were Claude; wrong for anything else.
+            cost_usd: result.cost_usd.filter(|_| !on_openrouter),
             backend_session_id: result.backend_session_id,
             is_error: result.is_error,
             cancelled: false,
@@ -261,7 +288,7 @@ impl ClaudeSession {
         );
         args.extend(extra_args.iter().cloned());
 
-        let mut child = spawn(cwd, &args)?;
+        let mut child = spawn(cwd, &args, &[])?;
         log_stderr(&mut child, run_id.clone());
 
         let stdin = child.stdin.take().context("claude child has no stdin")?;

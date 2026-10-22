@@ -77,6 +77,13 @@ output can merge anything.
 
 ### Working and verified
 
+- **OpenRouter** — a `provider = "openrouter"` worker run through `harness-cli run-worker`
+  against the real `claude` CLI and a local stand-in for OpenRouter's endpoint: the
+  request carried the OpenRouter key and the role's model, a `CLAUDE_CODE_OAUTH_TOKEN` in
+  the environment did not travel with it, and with a saved Claude login present the CLI
+  still sent the OpenRouter key. Not checked against openrouter.ai itself (unreachable
+  from the build machine), so real models' tool use is untested.
+
 - **275 engine tests** (297 including the separate Tauri shell workspace), no network or
   CLI login required.
 - **Orchestrator** — live end-to-end against the real `claude` CLI: it called `list_roles`,

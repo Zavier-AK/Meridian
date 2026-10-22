@@ -100,7 +100,8 @@ export default function FleetSetup({ projectRoot, inspection, onSaved }: Props) 
         <div className="role-editor">
           <p className="muted role-editor-note">
             Assignments update this project’s roles.toml. Local HTTP models remain limited
-            to text-only roles until Codex provides their tool loop.
+            to text-only roles until Codex provides their tool loop. OpenRouter models come
+            from Settings → OpenRouter and are billed per token.
           </p>
           {inspection.roles.map((role) => (
             <label className="role-assignment" key={role.name}>
