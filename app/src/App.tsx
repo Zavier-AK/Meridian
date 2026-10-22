@@ -9,7 +9,8 @@ import FlowView from "./FlowView";
 import SignInPanel from "./SignInPanel";
 import DiffDrawer from "./DiffDrawer";
 import FleetDrawer from "./FleetDrawer";
-import ProjectSidebar from "./ProjectSidebar";
+import ProjectRail, { type AppView } from "./ProjectRail";
+import GitHubView, { BranchIcon, tracking } from "./GitHubView";
 import LimitsPanel from "./LimitsPanel";
 import BudgetMeter from "./BudgetMeter";
 import PreviewPanel from "./PreviewPanel";
@@ -39,6 +40,7 @@ import type {
   ProjectStatus,
   ProjectView,
   QuotaReport,
+  RepoSummary,
   Role,
   SessionInfo,
   UsageRow,
@@ -82,7 +84,29 @@ export default function App() {
   const [limitsOpen, setLimitsOpen] = useState(false);
   const [quotas, setQuotas] = useState<QuotaReport | null>(null);
   /** The session, or one of the two full-pane views that replace it. */
-  const [view, setView] = useState<"session" | "tools" | "settings">("session");
+  const [view, setView] = useState<AppView>("session");
+  // The navigation rail: icons alone, or with names beside them.
+  const [navExpanded, setNavExpanded] = useState(() => {
+    try {
+      return localStorage.getItem("meridian.navExpanded") === "1";
+    } catch {
+      return false;
+    }
+  });
+  function toggleNav() {
+    setNavExpanded((expanded) => {
+      try {
+        localStorage.setItem("meridian.navExpanded", expanded ? "0" : "1");
+      } catch {
+        // Remembering is a convenience.
+      }
+      return !expanded;
+    });
+  }
+  // The repositories the project spans, re-read when the code may have changed.
+  const [repos, setRepos] = useState<RepoSummary[]>([]);
+  const [githubRepo, setGithubRepo] = useState("");
+  const [reposKey, setReposKey] = useState(0);
   const [autonomy, setAutonomy] = useState<Autonomy>("review");
   /** Per project: which MCP servers its head agent's CLI managed to connect. */
   const [mcpStatus, setMcpStatus] = useState<Record<string, McpStatus>>({});
@@ -126,6 +150,24 @@ export default function App() {
   const [changesKey, setChangesKey] = useState(0);
   // False only once checked: a repository with no commits, where workers can't start.
   const [hasCommits, setHasCommits] = useState(true);
+
+  useEffect(() => {
+    if (!session?.project_root) {
+      setRepos([]);
+      return;
+    }
+    let current = true;
+    // Coalesces a burst of events into one read.
+    const timer = window.setTimeout(() => {
+      invoke<{ repos: RepoSummary[] }>("github_overview")
+        .then((overview) => current && setRepos(overview.repos))
+        .catch(() => current && setRepos([]));
+    }, 400);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [session?.project_root, changesKey, reposKey]);
 
   // The project's plans, re-read when a different project comes to the front.
   useEffect(() => {
@@ -532,6 +574,9 @@ export default function App() {
       } else if (mod && event.key === ",") {
         event.preventDefault();
         setView("settings");
+      } else if (mod && event.key === "\\") {
+        event.preventDefault();
+        toggleNav();
       } else if (event.key === "Escape" && view !== "session" && !overlayOpen) {
         // Out of Tools or Settings first; a second Esc can then stop a turn.
         event.preventDefault();
@@ -761,6 +806,7 @@ export default function App() {
   }
 
   workersRef.current = workers;
+  const projectRepo = repos.find((repo) => repo.path === "") ?? repos[0] ?? null;
   const workerList = Object.values(workers).sort((a, b) => b.startedAt - a.startedAt);
   const selected = selectedWorker ? workers[selectedWorker] : null;
 
@@ -796,9 +842,29 @@ export default function App() {
         <span className="title" data-tauri-drag-region>
           Meridian
         </span>
-        <span className="muted mono" data-tauri-drag-region>
-          {session.project_root}
+        <span className="titlebar-project" data-tauri-drag-region title={session.project_root}>
+          {session.project_root.split("/").filter(Boolean).pop() ?? session.project_root}
         </span>
+        {projectRepo && (
+          <button
+            className={`repo-chip ${view === "github" ? "active" : ""}`}
+            onClick={() => {
+              setGithubRepo("");
+              setView(view === "github" ? "session" : "github");
+            }}
+            title={`${projectRepo.name} — ${projectRepo.has_commits ? tracking(projectRepo) : "no commits yet"}${
+              projectRepo.changed ? `, ${projectRepo.changed} uncommitted` : ""
+            }${repos.length > 1 ? `\nThis project spans ${repos.length} repositories` : ""}`}
+          >
+            <BranchIcon />
+            <span className="repo-chip-branch mono">{projectRepo.branch ?? "detached"}</span>
+            {projectRepo.remote?.github && <span className="repo-chip-name">{projectRepo.name}</span>}
+            {projectRepo.ahead > 0 && <span className="repo-chip-count mono">↑{projectRepo.ahead}</span>}
+            {projectRepo.behind > 0 && <span className="repo-chip-count mono">↓{projectRepo.behind}</span>}
+            {projectRepo.changed > 0 && <span className="repo-chip-count mono changed">●{projectRepo.changed}</span>}
+            {repos.length > 1 && <span className="repo-chip-more">+{repos.length - 1}</span>}
+          </button>
+        )}
         <span className="titlebar-spacer" data-tauri-drag-region />
         <BudgetMeter
           usage={usage}
@@ -810,16 +876,44 @@ export default function App() {
         />
       </header>
 
-      <div className={`panes ${railCollapsed ? "rail-collapsed" : ""}`}>
-        <ProjectSidebar
+      <div className={`panes ${railCollapsed ? "rail-collapsed" : ""} ${navExpanded ? "nav-expanded" : ""}`}>
+        <ProjectRail
           projects={projects}
           onFocus={focusProject}
           onClose={closeProject}
           onAdd={() => setAdding(true)}
           view={view}
-          onView={setView}
+          onView={(next) => {
+            if (next === "github") setGithubRepo("");
+            setView(next);
+          }}
+          expanded={navExpanded}
+          onToggleExpanded={toggleNav}
+          githubDot={repos.some((repo) => repo.ahead > 0)}
         />
         <main className={`main-pane ${switching ? "switching" : ""}`}>
+          {view === "github" && (
+            <GitHubView
+              key={session.project_root}
+              repos={repos}
+              initialRepo={githubRepo}
+              workers={workers}
+              onRefresh={() => setReposKey((key) => key + 1)}
+              onSelectWorker={setSelectedWorker}
+              onReview={(repo, pr) => {
+                setView("session");
+                setActivePane("chat");
+                const where = repo.path ? ` (the repository in \`${repo.path}\`)` : "";
+                void send(
+                  `Review pull request #${pr.number} "${pr.title}" on ${repo.name}${where}: ${pr.url}\n\n` +
+                    `Read it with \`gh pr view ${pr.number}\` and \`gh pr diff ${pr.number}\`, have a reviewer go through it, ` +
+                    `and tell me what should change before it merges.`,
+                  `Review PR #${pr.number}: ${pr.title}`,
+                );
+              }}
+              onClose={() => setView("session")}
+            />
+          )}
           {view === "tools" && (
             <ToolsView
               projectRoot={session.project_root}
