@@ -21,6 +21,9 @@ instead of API billing, and local models cost nothing.
 - **Shows the whole picture.** The **Flow** tab maps who's working on what and what's
   moving between them; the **Changes** panel lists every file touched, with lines added and
   removed.
+- **Keeps git in view.** The title bar shows the branch and repository you're on. One click
+  opens every repository the project spans, with its branches and open pull requests:
+  push, switch, clean up merged branches, or hand a pull request to an agent to review.
 - **You choose how much runs alone.** A slider, from *Ask* (every step waits for you) to
   *Land most* (verified, low-risk changes land by themselves).
 - **Plans and night shifts.** Multi-step work goes on a plan board you approve first. A
@@ -47,6 +50,12 @@ instead of API billing, and local models cost nothing.
   <tr>
     <td><b>Review</b> — comment on lines and send it back, merge, or open a PR.</td>
     <td><b>Autonomy</b> — how much runs without you.</td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/github.png" alt="The GitHub view: every repository in the project, its branches and pull requests"></td>
+  </tr>
+  <tr>
+    <td colspan="2"><b>GitHub</b> — every repository the project spans, its branches and pull requests.</td>
   </tr>
 </table>
 
@@ -95,6 +104,7 @@ your OpenRouter key and nothing else.
   [delegation](docs/GUIDE.md#delegation),
   [verification](docs/GUIDE.md#verification-before-merge),
   [sending work back and pull requests](docs/GUIDE.md#sending-work-back-and-pull-requests),
+  [branches and repositories](docs/GUIDE.md#repositories-branches-and-pull-requests),
   [the plan board](docs/GUIDE.md#the-plan-board),
   [night shift](docs/GUIDE.md#night-shift),
   [autonomy](docs/GUIDE.md#how-much-runs-without-you),

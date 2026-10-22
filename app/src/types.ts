@@ -201,7 +201,7 @@ export type GhState = "missing" | "signed_out" | "ready";
 /** Mirrors `publish::PrPlan`. */
 export type PrPlan = {
   suggested: PrDraft;
-  remote: { name: string; url: string; github: { owner: string; repo: string } | null } | null;
+  remote: GitRemote | null;
   gh: GhState;
 };
 
@@ -221,6 +221,60 @@ export type PrStatus = {
   failed: number;
   pending: number;
   failing: string[];
+};
+
+// ---------- GitHub view ----------
+
+export type GitRemote = { name: string; url: string; github: { owner: string; repo: string } | null };
+
+/** Mirrors `github::RepoSummary`. */
+export type RepoSummary = {
+  /** Relative to the project; "" for the project folder itself. */
+  path: string;
+  name: string;
+  kind: "project" | "submodule" | "nested";
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  changed: number;
+  has_commits: boolean;
+  remote: GitRemote | null;
+};
+
+/** Mirrors `github::BranchInfo`. */
+export type BranchInfo = {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  gone: boolean;
+  updated: number;
+  subject: string;
+  merged: boolean;
+  worker: string | null;
+};
+
+/** Mirrors `github::PullRequestSummary`. */
+export type PullRequestSummary = {
+  number: number;
+  title: string;
+  url: string;
+  head: string;
+  base: string;
+  author: string;
+  draft: boolean;
+  review: string | null;
+  checks: PrStatus;
+  updated_at: string;
+};
+
+export type PullRequestsView = {
+  gh: GhState;
+  items: PullRequestSummary[];
+  /** Pull requests this session opened, by worker. */
+  opened: { worker_id: string; url: string }[];
 };
 
 /** How much runs without the person. Mirrors `Autonomy` in the engine. */

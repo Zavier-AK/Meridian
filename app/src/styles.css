@@ -145,11 +145,16 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 /* Where the window is dragged from when there is no title bar. */
 .window-drag { position: fixed; top: 0; left: 0; right: 0; height: 32px; z-index: 5; }
 .add-project .window-drag { display: none; } /* the start screen shown as a dialog */
-.titlebar, .titlebar .title, .titlebar .mono { cursor: default; user-select: none; -webkit-user-select: none; }
-.titlebar .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.titlebar, .titlebar .title, .titlebar > .mono { cursor: default; user-select: none; -webkit-user-select: none; }
+.titlebar > .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.panes { flex: 1; display: grid; grid-template-columns: 200px 1fr 340px; min-height: 0; transition: grid-template-columns 0.18s ease; }
-.panes.rail-collapsed { grid-template-columns: 200px 1fr 40px; }
+.panes {
+  --nav-w: 60px;
+  flex: 1; display: grid; grid-template-columns: var(--nav-w) 1fr 340px; min-height: 0;
+  transition: grid-template-columns 0.18s ease;
+}
+.panes.nav-expanded { --nav-w: 212px; }
+.panes.rail-collapsed { grid-template-columns: var(--nav-w) 1fr 40px; }
 /* No underlines anywhere: links read by colour, and text boxes don't squiggle. */
 a, a:hover, u, ins, abbr[title] { text-decoration: none; }
 .main-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -555,37 +560,6 @@ button.link {
 button.link:hover { color: var(--accent-strong); }
 .fleet-drawer .fleet-setup { margin-top: 12px; }
 
-/* Project switcher. Its own column, mirroring the worker rail on the other side. */
-.sidebar {
-  background: var(--panel);
-  backdrop-filter: var(--blur);
-  border-right: 1px solid var(--border);
-  padding: 16px;
-  overflow-y: auto;
-  min-width: 0;
-}
-.sidebar-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.sidebar-head h2 { margin: 0; }
-.project-list { list-style: none; margin: 12px 0 0; padding: 0; }
-.project-list li { display: flex; align-items: center; gap: 4px; }
-button.project {
-  flex: 1; min-width: 0; text-align: left;
-  background: none; border: none; border-radius: var(--radius);
-  padding: 8px; cursor: pointer; color: var(--text);
-}
-button.project:hover { background: var(--accent-soft); }
-button.project.active { background: var(--accent-soft); color: var(--accent); }
-.project-name { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-meta { display: block; font-size: 11px; }
-.project-close { font-size: 16px; line-height: 1; padding: 0 4px; }
-/* Work happening where the user is not looking is the thing worth surfacing. */
-.elsewhere {
-  margin-top: 12px; padding: 8px;
-  border-radius: var(--radius);
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-size: 11px;
-}
 .main-pane.switching { opacity: 0.5; pointer-events: none; }
 .add-project {
   position: fixed; inset: 0; display: grid; place-items: center;
@@ -659,7 +633,6 @@ button.icon-button {
   color: var(--muted); cursor: pointer;
 }
 button.icon-button:hover { color: var(--accent); border-color: var(--border-strong); background: var(--accent-soft); }
-.sidebar-head { align-items: center; }
 
 /* ---------- markdown in the head chat ---------- */
 .bubble.markdown { white-space: normal; }
@@ -688,11 +661,6 @@ button.icon-button:hover { color: var(--accent); border-color: var(--border-stro
 .bubble.markdown th, .bubble.markdown td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
 
 /* ---------- Tools & Skills, Settings ---------- */
-.sidebar { display: flex; flex-direction: column; }
-.sidebar-foot {
-  margin-top: auto; padding-top: 12px;
-  display: flex; gap: 6px;
-}
 button.icon-button.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .session-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .session-pane.hidden { display: none; }
@@ -1530,3 +1498,161 @@ button.change-row:disabled { opacity: 1; cursor: default; }
 .openrouter-models li { gap: 2px; padding: 8px 10px; }
 .openrouter-model-row { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; }
 .openrouter-model-row .settings-name { overflow-wrap: anywhere; }
+
+/* ---------- navigation rail ---------- */
+
+.nav-rail {
+  display: flex; flex-direction: column; gap: 10px;
+  min-width: 0; overflow: hidden;
+  padding: 12px 8px 10px;
+  background: var(--panel);
+  backdrop-filter: var(--blur);
+  border-right: 1px solid var(--border);
+}
+.rail-projects {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px;
+  overflow-y: auto; overflow-x: hidden; min-height: 0;
+}
+.rail-projects li { position: relative; }
+.rail-places { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
+button.rail-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; min-width: 0; padding: 4px; border: none; border-radius: 12px;
+  background: none; color: var(--muted); text-align: left; cursor: pointer;
+}
+button.rail-item:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); border-color: transparent; }
+button.rail-item.active { color: var(--accent); background: var(--accent-soft); }
+.monogram {
+  position: relative; flex: none;
+  display: grid; place-items: center;
+  width: 36px; height: 36px; border-radius: 11px;
+  font-family: var(--font-display); font-size: 13px; font-weight: 650; letter-spacing: 0.02em;
+  color: hsl(var(--hue) 70% 86%);
+  background: hsl(var(--hue) 38% 30% / 0.75);
+  border: 1px solid hsl(var(--hue) 50% 60% / 0.28);
+}
+.rail-project.active .monogram { box-shadow: 0 0 0 2px var(--accent); }
+.rail-project.suspended .monogram { opacity: 0.55; }
+/* Work happening where the person isn't looking is the thing worth surfacing. */
+.rail-running {
+  position: absolute; left: -3px; bottom: -3px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--ok); border: 2px solid var(--panel-strong);
+  animation: rail-pulse 1.6s ease-in-out infinite;
+}
+@keyframes rail-pulse { 50% { opacity: 0.45; } }
+.rail-badge {
+  position: absolute; right: -5px; top: -5px;
+  min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 700; font-family: var(--font-body);
+  color: var(--on-accent); background: var(--warn); border: 2px solid var(--panel-strong);
+}
+.rail-icon {
+  position: relative; flex: none;
+  display: grid; place-items: center; width: 36px; height: 32px;
+}
+.rail-add .rail-icon { height: 36px; border: 1px dashed var(--border-strong); border-radius: 11px; }
+.rail-dot {
+  position: absolute; right: 6px; top: 5px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+}
+.rail-label { display: none; min-width: 0; flex-direction: column; }
+.nav-rail.expanded .rail-label { display: flex; }
+.rail-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-item.active .rail-name { color: var(--accent); }
+.rail-meta { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.rail-close {
+  position: absolute; top: -2px; right: -2px;
+  display: none; width: 16px; height: 16px; padding: 0; border-radius: 50%;
+  font-size: 11px; line-height: 1; color: var(--muted);
+  background: var(--panel-strong); border: 1px solid var(--border-strong);
+}
+.nav-rail.expanded button.rail-close { top: 50%; right: 4px; transform: translateY(-50%); }
+.rail-projects li:hover button.rail-close, button.rail-close:focus-visible { display: grid; place-items: center; }
+button.rail-close:hover:not(:disabled) { color: var(--error); background: var(--panel-strong); }
+
+/* ---------- title bar: project and repository ---------- */
+
+.titlebar-project { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+button.repo-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-width: 0; max-width: 46%; padding: 3px 10px; border-radius: 999px;
+  font-size: 12px; color: var(--muted);
+  background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border);
+  white-space: nowrap; overflow: hidden;
+}
+button.repo-chip:hover:not(:disabled), button.repo-chip.active { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+.repo-chip > * { flex: none; }
+.repo-chip-branch { color: var(--text); font-size: 11.5px; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; }
+.repo-chip .repo-chip-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.branch-icon { flex: none; vertical-align: -1px; }
+.repo-chip-count { font-size: 11px; color: var(--accent); }
+.repo-chip-count.changed { color: var(--warn); }
+.repo-chip-more { font-size: 11px; padding: 0 6px; border-radius: 999px; background: var(--accent-soft); color: var(--text); }
+
+/* ---------- GitHub view ---------- */
+
+.github-view {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 20px 24px 32px;
+  display: flex; flex-direction: column; gap: 14px;
+  background: var(--panel);
+}
+.github-view .settings-head h2 { color: var(--text); }
+.github-head-actions { display: flex; gap: 6px; }
+.repo-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+button.repo-pick {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 12px; border-radius: 12px; max-width: 260px; min-width: 0;
+  background: rgba(0, 0, 0, 0.16); border: 1px solid var(--border); color: var(--text); text-align: left;
+}
+button.repo-pick.active { border-color: var(--accent); background: var(--accent-soft); }
+.repo-pick-name { font-size: 13px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-pick-meta { font-size: 11px; color: var(--muted); }
+.repo-kind { font-size: 10.5px; color: var(--muted); }
+.repo-card {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-radius: 14px;
+  border: 1px solid var(--border); background: rgba(0, 0, 0, 0.18);
+}
+.repo-card-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1 1 280px; }
+.repo-title { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.repo-path { font-size: 12px; font-weight: 400; }
+.repo-facts { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; align-items: baseline; }
+.repo-branch { color: var(--text); font-size: 12px; }
+.repo-changed { color: var(--warn); }
+.repo-remote { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.github-notice { margin: 0; font-size: 12px; }
+.github-notice.ok { color: var(--ok); }
+.github-notice.error { color: var(--error); }
+.github-tabs { align-self: flex-start; }
+.github-list { display: flex; flex-direction: column; gap: 10px; }
+.github-list p { margin: 0; font-size: 13px; line-height: 1.5; }
+.github-list code { font-family: var(--mono); font-size: 11.5px; }
+.new-branch input { flex: 1 1 240px; }
+.github-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.github-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--border); background: rgba(0, 0, 0, 0.14);
+}
+.github-row.current { border-color: var(--border-strong); background: var(--accent-soft); }
+.github-row-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 300px; }
+.github-row-title { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+.current-mark { color: var(--accent); margin-right: 6px; font-size: 10px; vertical-align: 1px; }
+.github-row-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 11.5px; }
+.github-subject { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.github-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.github-row-actions button { font-size: 12px; padding: 4px 10px; }
+.pill {
+  display: inline-flex; align-items: center;
+  padding: 1px 8px; border-radius: 999px; font-size: 10.5px;
+  border: 1px solid var(--border); color: var(--muted); background: rgba(0, 0, 0, 0.18);
+}
+.pill.ok { color: var(--ok); border-color: rgba(143, 214, 168, 0.35); }
+.pill.bad { color: var(--error); border-color: rgba(255, 138, 148, 0.4); }
+button.pill.link-pill { cursor: pointer; color: var(--accent); }
+button.pill.link-pill:hover:not(:disabled) { background: var(--accent-soft); }

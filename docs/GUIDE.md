@@ -227,6 +227,41 @@ Both are your clicks only: like merging, neither is a tool the head agent can ca
   uncommitted in your checkout (the head agent's own edits included). View it by file —
   with which agents touched each one — or by agent. New files are marked; click one to
   open the worker's review.
+- **The sidebar** is a narrow rail. Each open project is a tile with its initials. A
+  green dot means workers are running there, and a number counts changes waiting for
+  review, so work going on in another project stays visible. **⌘1–9** switch projects,
+  **⌘N** opens one, and **⌘\\** widens the rail to show names. GitHub, Tools & Skills and
+  Settings sit at the bottom.
+
+## Repositories, branches and pull requests
+
+The title bar always shows where the project's checkout is: its branch, its GitHub
+repository, commits not yet pushed (↑), commits to pull (↓) and uncommitted files (●).
+**+2** means the project spans two more repositories. Click it, or the branch icon in the
+rail, for the **GitHub** view.
+
+**Every repository in the project** is listed: the folder itself, its submodules, and
+separate repositories inside it, two levels deep (`node_modules`, build folders and
+`.harness/` are skipped). Pick one to see:
+
+- **Where it stands**: its branch, how it compares with its upstream, uncommitted files,
+  and its remote. **Push** sends unpushed commits, or publishes a branch that has never
+  been pushed.
+- **Branches**, newest first. Each shows its last commit, how it compares with its
+  upstream, whether it's already merged into the current branch, and which worker made
+  it (`harness/…` branches). You can create a branch (it starts from the current commit
+  and keeps your uncommitted changes), switch, push, or delete. Every branch change is
+  checked first:
+  - switching or checking out a pull request is refused with uncommitted changes, so
+    they never travel to another branch unnoticed;
+  - the project's own branch can't change while workers or a plan are running from it;
+  - only branches already merged into the current one can be deleted, and never one
+    that's waiting for your review.
+- **Pull requests** open on that repository, through the GitHub CLI (`gh`, signed in
+  with `gh auth login`). Each shows its branches, author, draft and review state, and
+  its checks. Ones this session opened link back to the worker that made them. **Review
+  with agent** hands the pull request to the head agent, which reads it with `gh` and
+  has a reviewer go through it. **Check out** brings its branch here.
 
 ## Look and feel
 

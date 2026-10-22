@@ -77,6 +77,12 @@ output can merge anything.
 
 ### Working and verified
 
+- **GitHub view and navigation rail** — repository discovery (project, submodules,
+  nested repos), branch listing, create/switch/delete with their refusals, and path
+  containment are tested against real git repositories. Pull requests are read with
+  `gh pr list`; the parsing is tested, but `gh` itself wasn't run here (not installed on
+  the build machine). The rail, title-bar chip and view were rendered headlessly.
+
 - **OpenRouter** — a `provider = "openrouter"` worker run through `harness-cli run-worker`
   against the real `claude` CLI and a local stand-in for OpenRouter's endpoint: the
   request carried the OpenRouter key and the role's model, a `CLAUDE_CODE_OAUTH_TOKEN` in

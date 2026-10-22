@@ -1208,6 +1208,168 @@ async fn pull_request_status(
     Ok(Some(PullRequestView { pr, status }))
 }
 
+// ------------------------------------------------------------------- github
+
+#[derive(Serialize)]
+struct GithubOverview {
+    repos: Vec<harness_core::github::RepoSummary>,
+}
+
+/// The project's repositories and the state of each checkout. Cheap: `git` only.
+#[tauri::command]
+async fn github_overview(
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<GithubOverview, String> {
+    let harness = harness_for(&state, project).await?;
+    Ok(GithubOverview {
+        repos: harness_core::github::discover(harness.workspaces().project_root()).await,
+    })
+}
+
+async fn github_repo(
+    state: &AppState,
+    project: Option<String>,
+    repo: &str,
+) -> Result<(Arc<Harness>, PathBuf), String> {
+    let harness = harness_for(state, project).await?;
+    let path = harness_core::github::resolve(harness.workspaces().project_root(), repo)
+        .map_err(|e| format!("{e:#}"))?;
+    Ok((harness, path))
+}
+
+/// Workers branch from, merge into, and (when shared) work in the project's own
+/// checkout, so its branch doesn't change under them.
+async fn refuse_while_busy(harness: &Harness, repo: &str) -> Result<(), String> {
+    if !repo.is_empty() {
+        return Ok(());
+    }
+    use harness_core::event::WorkerStatus::*;
+    let busy = harness
+        .workers()
+        .await
+        .iter()
+        .filter(|w| {
+            matches!(
+                w.status,
+                Queued | Blocked | Preparing | AwaitingApproval | Running
+            )
+        })
+        .count();
+    if busy > 0 {
+        return Err(format!(
+            "{busy} worker(s) are running from this branch — wait for them, or stop them, first"
+        ));
+    }
+    if harness.plans_running().await {
+        return Err("a plan is running from this branch — wait for it first".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn github_branches(
+    state: State<'_, AppState>,
+    repo: String,
+    project: Option<String>,
+) -> Result<Vec<harness_core::github::BranchInfo>, String> {
+    let (_, path) = github_repo(&state, project, &repo).await?;
+    harness_core::github::branches(&path)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Serialize)]
+struct PullRequestsView {
+    #[serde(flatten)]
+    list: harness_core::github::PullRequestList,
+    /// Pull requests this session opened, so they can be shown as Meridian's.
+    opened: Vec<OpenedPullRequest>,
+}
+
+#[derive(Serialize)]
+struct OpenedPullRequest {
+    worker_id: String,
+    url: String,
+}
+
+#[tauri::command]
+async fn github_pull_requests(
+    state: State<'_, AppState>,
+    repo: String,
+    project: Option<String>,
+) -> Result<PullRequestsView, String> {
+    let (harness, path) = github_repo(&state, project, &repo).await?;
+    let list = harness_core::github::pull_requests(&path)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let opened = harness
+        .pull_requests()
+        .await
+        .into_iter()
+        .map(|(worker_id, pr)| OpenedPullRequest {
+            worker_id,
+            url: pr.url,
+        })
+        .collect();
+    Ok(PullRequestsView { list, opened })
+}
+
+/// One change to a repository's branches. `kind` is `switch`, `create`, `delete`, `push`
+/// or `checkout_pr` (with `number`).
+#[tauri::command]
+async fn github_branch_action(
+    state: State<'_, AppState>,
+    repo: String,
+    kind: String,
+    name: Option<String>,
+    number: Option<u64>,
+    project: Option<String>,
+) -> Result<String, String> {
+    use harness_core::github as gh;
+    let (harness, path) = github_repo(&state, project, &repo).await?;
+    let name = name.unwrap_or_default();
+    let done = match kind.as_str() {
+        "switch" => {
+            refuse_while_busy(&harness, &repo).await?;
+            gh::switch_branch(&path, &name)
+                .await
+                .map(|_| format!("On {name}"))
+        }
+        "create" => {
+            refuse_while_busy(&harness, &repo).await?;
+            gh::create_branch(&path, &name)
+                .await
+                .map(|_| format!("Made {name}, and switched to it"))
+        }
+        "delete" => {
+            if repo.is_empty() {
+                let waiting = harness.pending_merges().await;
+                if waiting.iter().any(|(_, branch)| branch == &name) {
+                    return Err(format!(
+                        "`{name}` is waiting for review — merge or discard it instead"
+                    ));
+                }
+            }
+            gh::delete_branch(&path, &name)
+                .await
+                .map(|_| format!("Deleted {name}"))
+        }
+        "push" => gh::push_branch(&path, &name)
+            .await
+            .map(|remote| format!("Pushed {name} to {remote}")),
+        "checkout_pr" => {
+            refuse_while_busy(&harness, &repo).await?;
+            let number = number.ok_or("which pull request?")?;
+            gh::checkout_pull_request(&path, number)
+                .await
+                .map(|_| format!("Checked out #{number}"))
+        }
+        other => return Err(format!("unknown branch action `{other}`")),
+    };
+    done.map_err(|e| format!("{e:#}"))
+}
+
 #[derive(Serialize)]
 struct PullRequestView {
     #[serde(flatten)]
@@ -2060,6 +2222,10 @@ pub fn run() {
             changes_overview,
             claude_account,
             claude_sign_in,
+            github_overview,
+            github_branches,
+            github_pull_requests,
+            github_branch_action,
             openrouter_status,
             openrouter_save_key,
             openrouter_remove_key,

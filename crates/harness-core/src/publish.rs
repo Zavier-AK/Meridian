@@ -19,7 +19,7 @@ pub struct GithubRepo {
 }
 
 /// Where the branch will go.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Remote {
     pub name: String,
     pub url: String,
@@ -87,7 +87,12 @@ pub struct PrStatus {
     pub failing: Vec<String>,
 }
 
-async fn run(cwd: &Path, program: &str, args: &[&str], stdin: Option<&str>) -> Result<String> {
+pub(crate) async fn run(
+    cwd: &Path,
+    program: &str,
+    args: &[&str],
+    stdin: Option<&str>,
+) -> Result<String> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -410,7 +415,7 @@ pub async fn status(project: &Path, url: &str) -> Result<PrStatus> {
     Ok(parse_status(&serde_json::from_str(&out)?))
 }
 
-fn parse_status(view: &serde_json::Value) -> PrStatus {
+pub(crate) fn parse_status(view: &serde_json::Value) -> PrStatus {
     let mut status = PrStatus {
         state: view["state"].as_str().unwrap_or("UNKNOWN").to_string(),
         draft: view["isDraft"].as_bool().unwrap_or(false),

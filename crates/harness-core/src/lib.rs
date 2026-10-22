@@ -17,6 +17,7 @@ pub mod detection;
 pub mod engine;
 pub mod event;
 pub mod extensions;
+pub mod github;
 pub mod hooks;
 pub mod isolation;
 pub mod mcp;

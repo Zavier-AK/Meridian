@@ -2285,6 +2285,16 @@ impl Harness {
         self.pull_requests.read().await.get(worker_id).cloned()
     }
 
+    /// Every pull request opened from this session, by worker.
+    pub async fn pull_requests(&self) -> Vec<(String, crate::publish::PullRequest)> {
+        self.pull_requests
+            .read()
+            .await
+            .iter()
+            .map(|(id, pr)| (id.clone(), pr.clone()))
+            .collect()
+    }
+
     /// The diff a worker left on its branch, for review before it is landed.
     pub async fn worker_patch(
         &self,
