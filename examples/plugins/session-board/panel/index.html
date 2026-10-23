@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 20px 24px; background: #1b151e; color: #f5eaef;
+         font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  h1 { font-size: 17px; margin: 0 0 2px; } .muted { color: #b09aa5; }
+  .row { display: flex; gap: 8px; margin: 14px 0 18px; }
+  button { font: inherit; color: #f5eaef; background: rgba(255,255,255,.06); border: 1px solid rgba(255,183,202,.18);
+           border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+  button:hover { background: rgba(255,158,187,.15); }
+  h2 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #b09aa5; margin: 18px 0 8px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+  .card { border: 1px solid rgba(255,183,202,.14); border-radius: 12px; padding: 10px 12px; background: rgba(0,0,0,.18); }
+  .card b { font-weight: 600; } .status { float: right; font-size: 11px; }
+  .running { color: #ff9ebb; } .done { color: #8fd6a8; } .failed { color: #ff8a94; }
+  pre { white-space: pre-wrap; background: rgba(0,0,0,.25); border-radius: 10px; padding: 10px 12px; margin: 0;
+        font: 11.5px ui-monospace, "SF Mono", Menlo, monospace; max-height: 220px; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; } td { padding: 5px 8px; border-top: 1px solid rgba(255,183,202,.1); }
+</style>
+</head>
+<body>
+  <h1 id="title">Session board</h1>
+  <div class="muted" id="sub"></div>
+  <div class="row">
+    <button id="status">Git status</button>
+    <button id="landed">What landed</button>
+    <button id="standup">Stand-up summary</button>
+  </div>
+  <pre id="out" hidden></pre>
+  <h2>Workers</h2>
+  <div class="cards" id="workers"><span class="muted">None yet.</span></div>
+  <h2>Repositories</h2>
+  <table id="repos"></table>
+  <script src="__meridian.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const text = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+    async function refresh() {
+      const ctx = await Meridian.context();
+      $("title").textContent = ctx.project.name;
+      $("sub").textContent = `${ctx.workers.length} worker(s) this session · ${ctx.repos.length} repositor${ctx.repos.length === 1 ? "y" : "ies"}`;
+      $("workers").innerHTML = ctx.workers.length
+        ? ctx.workers.map((w) => `<div class="card"><span class="status ${text(w.status)}">${text(w.status)}</span>
+            <b>${w.number ? "#" + w.number + " " : ""}${text(w.role)}</b>
+            <div class="muted">${text(w.summary || "working…")}</div>
+            ${w.files ? `<div class="muted">${w.files} file(s)${w.branch ? " · " + text(w.branch) : ""}</div>` : ""}</div>`).join("")
+        : '<span class="muted">None yet.</span>';
+      $("repos").innerHTML = ctx.repos.map((r) => `<tr><td>${text(r.name)}</td><td class="muted">${text(r.branch ?? "detached")}</td>
+          <td class="muted">${r.ahead ? "↑" + r.ahead : ""} ${r.behind ? "↓" + r.behind : ""} ${r.changed ? r.changed + " changed" : ""}</td></tr>`).join("");
+    }
+
+    async function show(id) {
+      $("out").hidden = false;
+      $("out").textContent = "…";
+      try {
+        const result = await Meridian.run(id);
+        $("out").textContent = result.output || "(nothing printed)";
+      } catch (error) {
+        $("out").textContent = String(error.message || error);
+      }
+    }
+
+    $("status").onclick = () => show("git-status");
+    $("landed").onclick = () => show("landed");
+    $("standup").onclick = () => Meridian.ask("Using the session-board-standup skill, give me a stand-up summary of this session.");
+    // Anything that changes a worker or the code: read again.
+    Meridian.on((event) => {
+      if (/^(worker_|merge_|verification_finished)/.test(event.type)) refresh();
+    });
+    refresh();
+  </script>
+</body>
+</html>

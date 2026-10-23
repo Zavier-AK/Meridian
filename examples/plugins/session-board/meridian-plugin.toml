@@ -1,0 +1,28 @@
+name = "session-board"
+title = "Session board"
+version = "0.1.0"
+description = "A tab with every worker and repository at a glance, a log of what landed, and a stand-up summary on demand."
+
+[[commands]]
+id = "git-status"
+title = "Git status"
+run = "git status --short --branch"
+
+[[commands]]
+id = "landed"
+title = "What landed today"
+run = "cat \"$MERIDIAN_PLUGIN_DATA/landed.log\" 2>/dev/null || echo 'Nothing has landed since the plugin was turned on.'"
+
+[[commands]]
+id = "standup"
+title = "Stand-up summary"
+prompt = "Using the session-board-standup skill, give me a stand-up summary of this session."
+
+[[hooks]]
+on = ["merge_landed"]
+run = "printf '%s  %s\\n' \"$(date '+%H:%M')\" \"$(cat)\" >> \"$MERIDIAN_PLUGIN_DATA/landed.log\""
+
+[[panels]]
+id = "board"
+title = "Board"
+entry = "panel/index.html"

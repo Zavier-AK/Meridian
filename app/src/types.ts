@@ -333,6 +333,8 @@ export type ChatItem =
   | { kind: "assistant"; text: string }
   | { kind: "tool"; name: string; toolUseId?: string; workerId?: string }
   | { kind: "notice"; text: string; tone: "info" | "warn" | "error" }
+  /** What a plugin command printed. */
+  | { kind: "output"; title: string; ok: boolean; text: string }
   /** A merge that landed, with the way back. */
   | { kind: "landed"; workerId: string; text: string; undone: boolean }
   /** Something the head agent asked to do, waiting for the person's yes or no. */
@@ -733,4 +735,50 @@ export type Flow = {
 export function compactTokens(tokens: number): string {
   if (tokens < 1000) return String(tokens);
   return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+}
+
+// ---------- Plugins ----------
+
+export type PluginCommandSpec = {
+  id: string;
+  title: string;
+  run: string | null;
+  prompt: string | null;
+  timeout_secs: number | null;
+};
+
+export type PluginManifest = {
+  name: string;
+  title: string | null;
+  version: string | null;
+  description: string | null;
+  commands: PluginCommandSpec[];
+  hooks: { on: string[]; run: string; timeout_secs: number | null }[];
+  panels: { id: string; title: string; entry: string }[];
+  mcp_servers: Record<string, McpServerConfig>;
+};
+
+/** Mirrors `plugins::Plugin`. */
+export type Plugin = {
+  key: string;
+  scope: "installed" | "project";
+  dir: string;
+  manifest: PluginManifest | null;
+  error: string | null;
+  skills: string[];
+  digest: string;
+  state: "off" | "on" | "changed" | "broken";
+  data_dir: string;
+};
+
+/** Mirrors `plugins::CommandOutput`. */
+export type PluginCommandOutput = {
+  exit_code: number | null;
+  output: string;
+  truncated: boolean;
+  timed_out: boolean;
+};
+
+export function pluginTitle(plugin: Plugin): string {
+  return plugin.manifest?.title || plugin.manifest?.name || plugin.key.split(":")[1] || plugin.key;
 }

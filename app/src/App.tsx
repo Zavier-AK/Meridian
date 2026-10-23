@@ -17,6 +17,8 @@ import PreviewPanel from "./PreviewPanel";
 import ToolsView from "./ToolsView";
 import AutonomyDial, { nextStop } from "./AutonomyDial";
 import PlanBoard from "./PlanBoard";
+import PluginPanel, { type PanelContext } from "./PluginPanel";
+import PluginCommands from "./PluginCommands";
 import NightView from "./NightView";
 import SettingsView from "./SettingsView";
 import { dispatch, type VoiceHandlers } from "./voice";
@@ -39,6 +41,9 @@ import type {
   ProjectHarnessEvent,
   ProjectStatus,
   ProjectView,
+  Plugin,
+  PluginCommandOutput,
+  PluginCommandSpec,
   QuotaReport,
   RepoSummary,
   Role,
@@ -58,7 +63,7 @@ export default function App() {
   const [rateLimited, setRateLimited] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [activePane, setActivePane] = useState<"chat" | "plan" | "night" | "preview" | "flow">("chat");
+  const [activePane, setActivePane] = useState<"chat" | "plan" | "night" | "preview" | "flow" | "plugin">("chat");
   // What moved between you, the head agent and the workers, newest first.
   const [flows, setFlows] = useState<Flow[]>([]);
   const workersRef = useRef<Record<string, Worker>>({});
@@ -107,6 +112,10 @@ export default function App() {
   const [repos, setRepos] = useState<RepoSummary[]>([]);
   const [githubRepo, setGithubRepo] = useState("");
   const [reposKey, setReposKey] = useState(0);
+  // The project's plugins, and which plugin tab is showing when the pane is "plugin".
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [pluginsKey, setPluginsKey] = useState(0);
+  const [pluginTab, setPluginTab] = useState<string | null>(null);
   const [autonomy, setAutonomy] = useState<Autonomy>("review");
   /** Per project: which MCP servers its head agent's CLI managed to connect. */
   const [mcpStatus, setMcpStatus] = useState<Record<string, McpStatus>>({});
@@ -170,6 +179,38 @@ export default function App() {
       window.clearTimeout(timer);
     };
   }, [session?.project_root, changesKey, reposKey]);
+
+  useEffect(() => {
+    if (!session?.project_root) {
+      setPlugins([]);
+      return;
+    }
+    let current = true;
+    invoke<Plugin[]>("plugins_list")
+      .then((list) => current && setPlugins(list))
+      .catch(() => current && setPlugins([]));
+    return () => {
+      current = false;
+    };
+    // A project's own plugins arrive with a landed change, so re-read when code changes.
+  }, [session?.project_root, pluginsKey, changesKey]);
+
+  // A plugin tab whose plugin was turned off (or changed) falls back to the chat.
+  useEffect(() => {
+    if (activePane !== "plugin") return;
+    const [key, panel] = (pluginTab ?? "").split("#");
+    const still = plugins.some(
+      (p) => p.key === key && p.state === "on" && p.manifest?.panels.some((x) => x.id === panel),
+    );
+    if (!still) setActivePane("chat");
+  }, [activePane, pluginTab, plugins]);
+
+  useEffect(() => {
+    const off = listen<string>("harness://changed", ({ payload }) => {
+      if (payload === "plugins") setPluginsKey((key) => key + 1);
+    });
+    return () => void off.then((stop) => stop());
+  }, []);
 
   // The project's plans, re-read when a different project comes to the front.
   useEffect(() => {
@@ -816,6 +857,64 @@ export default function App() {
   }
 
   workersRef.current = workers;
+  const enabledPlugins = plugins.filter((plugin) => plugin.state === "on");
+  const pluginPanels = enabledPlugins.flatMap((plugin) =>
+    (plugin.manifest?.panels ?? []).map((panel) => ({ id: `${plugin.key}#${panel.id}`, plugin, panel })),
+  );
+  const openPanel = activePane === "plugin" ? pluginPanels.find((p) => p.id === pluginTab) : undefined;
+  const panelContext = (): PanelContext => ({
+    project: {
+      root: session.project_root,
+      name: session.project_root.split("/").filter(Boolean).pop() ?? session.project_root,
+    },
+    workers: Object.values(workersRef.current).map((w) => ({
+      id: w.id,
+      number: w.number,
+      role: w.role,
+      status: w.status,
+      summary: w.summary,
+      branch: w.branch,
+      files: w.diff?.files_changed ?? null,
+    })),
+    repos: repos.map((r) => ({
+      path: r.path,
+      name: r.name,
+      branch: r.branch,
+      ahead: r.ahead,
+      behind: r.behind,
+      changed: r.changed,
+    })),
+  });
+  const askInChat = (text: string) => {
+    setView("session");
+    setActivePane("chat");
+    setDictated({ text, at: Date.now() });
+  };
+  async function runPluginCommand(plugin: Plugin, command: PluginCommandSpec) {
+    if (command.prompt) {
+      askInChat(command.prompt);
+      return;
+    }
+    const name = plugin.manifest?.title || plugin.manifest?.name || plugin.key;
+    try {
+      const out = await invoke<PluginCommandOutput>("plugin_run_command", {
+        key: plugin.key,
+        command: command.id,
+      });
+      const status = out.timed_out ? "timed out" : out.exit_code === 0 ? "done" : `exited ${out.exit_code ?? "?"}`;
+      setChat((prev) => [
+        ...prev,
+        {
+          kind: "output",
+          title: `${name} · ${command.title} — ${status}`,
+          ok: out.exit_code === 0,
+          text: out.output + (out.truncated ? "\n… (cut off)" : ""),
+        },
+      ]);
+    } catch (err) {
+      setChat((prev) => [...prev, { kind: "notice", tone: "error", text: `${name} · ${command.title}: ${String(err)}` }]);
+    }
+  }
   const projectRepo = repos.find((repo) => repo.path === "") ?? repos[0] ?? null;
   const workerList = Object.values(workers).sort((a, b) => b.startedAt - a.startedAt);
   const selected = selectedWorker ? workers[selectedWorker] : null;
@@ -929,6 +1028,16 @@ export default function App() {
               projectRoot={session.project_root}
               mcpStatus={mcpStatus[session.project_root] ?? null}
               onClose={() => setView("session")}
+              onMakePlugin={(description) => {
+                setView("session");
+                setActivePane("chat");
+                void send(
+                  `Make a Meridian plugin for this project: ${description}\n\n` +
+                    "Use the harness:meridian-plugins skill for the format. Have a builder create it under " +
+                    "`.meridian/plugins/<name>/`, and tell me exactly what it will run, so I know what I'm approving.",
+                  `Make a plugin: ${description}`,
+                );
+              }}
             />
           )}
           {view === "settings" && (
@@ -997,7 +1106,35 @@ export default function App() {
               >
                 Flow
               </button>
+              {pluginPanels.map((entry) => (
+                <button
+                  key={entry.id}
+                  role="tab"
+                  aria-selected={openPanel?.id === entry.id}
+                  className={`plugin-tab ${openPanel?.id === entry.id ? "active" : ""}`}
+                  onClick={() => {
+                    setPluginTab(entry.id);
+                    setActivePane("plugin");
+                  }}
+                  title={`From the ${entry.plugin.manifest?.title || entry.plugin.manifest?.name} plugin`}
+                >
+                  {entry.panel.title}
+                </button>
+              ))}
             </nav>
+            {openPanel && (
+              <div className="tab-panel plugin-panel" role="tabpanel">
+                <PluginPanel
+                  key={openPanel.id}
+                  projectRoot={session.project_root}
+                  pluginKey={openPanel.plugin.key}
+                  panelId={openPanel.panel.id}
+                  title={openPanel.panel.title}
+                  context={panelContext}
+                  onAsk={askInChat}
+                />
+              </div>
+            )}
             {activePane === "flow" && (
               <div className="tab-panel flow-panel" role="tabpanel">
                 <FlowView
@@ -1030,7 +1167,12 @@ export default function App() {
                 onPermission={(id, decision) => void answerPermission(id, decision)}
                 model={headModel}
                 promptTokens={headPrompt}
-                tools={<AutonomyDial level={autonomy} onChange={(level) => void changeAutonomy(level)} />}
+                tools={
+                  <>
+                    <AutonomyDial level={autonomy} onChange={(level) => void changeAutonomy(level)} />
+                    <PluginCommands plugins={enabledPlugins} onCommand={(plugin, command) => void runPluginCommand(plugin, command)} />
+                  </>
+                }
                 mic={micButton}
                 needsFirstCommit={!hasCommits}
                 onFirstCommit={() => void makeFirstCommit()}

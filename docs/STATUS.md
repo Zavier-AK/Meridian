@@ -77,6 +77,19 @@ output can merge anything.
 
 ### Working and verified
 
+- **Plugins.**
+  - Tested in the engine: discovery, approval by digest (a changed file turns a plugin
+    off, and approval is per project), commands, hooks with the event on stdin, panel file
+    containment, installing and replacing, symlinks not followed, and plugin skills and
+    tools reaching the agents' extras.
+  - The shipped example plugin is tested end to end (install, commands, hook log).
+  - The app's panel server is tested for serving, refusal while off or changed, and path
+    tricks.
+  - The UI was rendered headlessly with the example panel running through the real bridge
+    (context and a command), plus the chat-box commands and the review screen.
+  - Not run here: the `meridian-plugin://` scheme inside the real macOS webview, which
+    needs the app running on a Mac.
+
 - **Smaller prompts per agent** — measured with the real CLI (2.1.309, haiku):
   - A builder's first request drops from 36.4k to 8.4k tokens with `--tools`.
   - The same `run-worker` task went from 111.7k to 47.0k input tokens.

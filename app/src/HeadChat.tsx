@@ -142,6 +142,13 @@ export default function HeadChat({
                   {item.text}
                 </div>
               );
+            case "output":
+              return (
+                <details key={i} className={`notice plugin-output ${item.ok ? "info" : "error"}`}>
+                  <summary>{item.title}</summary>
+                  <pre className="mono">{item.text || "(no output)"}</pre>
+                </details>
+              );
             case "permission":
               return <PermissionCard key={i} item={item} onAnswer={onPermission} />;
             case "landed":

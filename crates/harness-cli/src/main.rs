@@ -493,7 +493,9 @@ async fn build_harness(cli: &Cli, events: harness_core::agents::EventSink) -> Re
 
     // Skills and MCP servers are an addition, never a reason not to run.
     if let Some(dir) = cli.extensions.clone().or_else(harness_core::extensions::default_dir) {
-        match harness_core::extensions::Extensions::new(dir).worker_extras() {
+        // Plugins the person turned on in the app reach the CLI's agents too.
+        let enabled = harness_core::plugins::Plugins::new(&dir).enabled(Some(&project));
+        match harness_core::extensions::Extensions::new(dir).worker_extras_with(&enabled) {
             Ok(extras) => harness.set_extras(extras).await,
             Err(error) => tracing::warn!("skills and MCP servers not loaded: {error:#}"),
         }

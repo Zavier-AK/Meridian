@@ -3,11 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { ImportReport, McpServerConfig, McpStatus, RoleTools, SkillInfo } from "./types";
+import PluginsSection from "./PluginsSection";
 
 type Props = {
   projectRoot: string;
   mcpStatus: McpStatus | null;
   onClose: () => void;
+  /** Hand the head agent a request to build a plugin. */
+  onMakePlugin: (description: string) => void;
 };
 
 /** Claude Code's built-in tools, offered as suggestions; any rule can still be typed. */
@@ -19,7 +22,7 @@ const BUILT_IN_TOOLS = ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "WebFet
  * Skills and MCP servers are app-wide — one library, whatever project is open. Tools are
  * per role and per project, because they live in that project's `roles.toml`.
  */
-export default function ToolsView({ projectRoot, mcpStatus, onClose }: Props) {
+export default function ToolsView({ projectRoot, mcpStatus, onClose, onMakePlugin }: Props) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [servers, setServers] = useState<Record<string, McpServerConfig>>({});
   const [roles, setRoles] = useState<RoleTools[]>([]);
@@ -82,6 +85,8 @@ export default function ToolsView({ projectRoot, mcpStatus, onClose }: Props) {
 
       {error && <p className="error">{error}</p>}
       {notice && <p className="notice info">{notice}</p>}
+
+      <PluginsSection onMakePlugin={onMakePlugin} />
 
       <SkillsSection
         skills={skills}
@@ -185,7 +190,9 @@ function SkillsSection({
             <span className="settings-desc">{skill.description}</span>
             <span className="settings-meta muted">
               {skill.source === "bundled"
-                ? "Built in · adapted from David Ondrej's skills"
+                ? skill.name === "meridian-plugins"
+                  ? "Built in · how agents make Meridian plugins"
+                  : "Built in · adapted from David Ondrej's skills"
                 : skill.origin
                   ? `From ${skill.origin}`
                   : "Yours"}

@@ -27,6 +27,7 @@ pub mod openrouter;
 pub mod orchestrator;
 pub mod permissions;
 pub mod plan;
+pub mod plugins;
 pub mod publish;
 pub mod quota;
 pub mod revise;
