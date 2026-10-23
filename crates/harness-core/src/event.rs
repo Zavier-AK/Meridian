@@ -318,6 +318,13 @@ pub enum HarnessEvent {
         run_id: String,
         message: String,
     },
+    /// How many tokens a run's first request carried: system prompt, tool definitions and
+    /// context, before any work. Every later request re-reads at least this much, so it is
+    /// the number that shows whether a run is carrying more than it needs.
+    PromptSize {
+        run_id: String,
+        tokens: u64,
+    },
     /// A Claude run failed because its sign-in did (expired, revoked, refresh refused).
     /// Follows that run's `RunFinished`.
     SignInProblem {
@@ -346,6 +353,7 @@ impl HarnessEvent {
             | Self::UserMessage { run_id, .. }
             | Self::RunFinished { run_id, .. }
             | Self::Error { run_id, .. }
+            | Self::PromptSize { run_id, .. }
             | Self::SignInProblem { run_id, .. } => run_id,
             Self::WorkerSpawned { worker_id, .. }
             | Self::WorkerStatusChanged { worker_id, .. }

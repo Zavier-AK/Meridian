@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatItem, PermissionDecision } from "./types";
+import { compactTokens } from "./types";
 
 type Props = {
   items: ChatItem[];
@@ -24,6 +25,8 @@ type Props = {
   tools?: React.ReactNode;
   /** The head agent's model, shown in the chat box. */
   model?: string | null;
+  /** Tokens the head agent's first request carried, shown beside its model. */
+  promptTokens?: number | null;
   /** The hold-to-talk button, beside Send. */
   mic?: React.ReactNode;
 };
@@ -64,6 +67,7 @@ export default function HeadChat({
   onFirstCommit,
   tools,
   model,
+  promptTokens,
   mic,
 }: Props) {
   const [draft, setDraft] = useState("");
@@ -197,8 +201,16 @@ export default function HeadChat({
         <div className="composer-bar">
           <div className="composer-tools">{tools}</div>
           {model && (
-            <span className="composer-model" title="The head agent's model (change the default in Settings)">
+            <span
+              className="composer-model"
+              title={`The head agent's model (change the default in Settings)${
+                promptTokens
+                  ? `\nEach turn starts from a ${promptTokens.toLocaleString()}-token prompt — instructions and tool definitions, read back from cache`
+                  : ""
+              }`}
+            >
               {model}
+              {promptTokens ? <span className="composer-prompt mono"> · {compactTokens(promptTokens)}</span> : null}
             </span>
           )}
           {mic}

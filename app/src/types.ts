@@ -51,6 +51,7 @@ export type HarnessEvent =
   | { type: "run_finished"; run_id: string; text: string; usage: Usage; cost_usd: number | null; is_error: boolean }
   | { type: "error"; run_id: string; message: string }
   | { type: "sign_in_problem"; run_id: string; message: string }
+  | { type: "prompt_size"; run_id: string; tokens: number }
   | { type: "turn_interrupted"; run_id: string }
   | { type: "permission_request"; run_id: string; request_id: string; tool: string; description: string; input: unknown; rules: string[] }
   | { type: "permission_resolved"; run_id: string; request_id: string; allowed: boolean }
@@ -174,6 +175,8 @@ export type Worker = {
   landed?: { commit: string; automatic: boolean } | null;
   /** How many times it was sent back for another pass. */
   revision?: number;
+  /** Tokens its first request carried: what every request re-reads at least. */
+  promptTokens?: number;
   /** The pull request opened from its branch. */
   pullRequest?: PullRequest | null;
 };
@@ -725,3 +728,9 @@ export type Flow = {
   text: string;
   workerId?: string;
 };
+
+/** 8,412 → "8.4k": prompt sizes, where the exact count is noise. */
+export function compactTokens(tokens: number): string {
+  if (tokens < 1000) return String(tokens);
+  return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+}

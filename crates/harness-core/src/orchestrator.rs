@@ -181,6 +181,32 @@ pub fn orchestrator_role_native(model: Option<String>, max_turns: Option<u32>) -
     role
 }
 
+/// What the head agent may ask the person for, beyond what it may do unasked.
+pub const HEAD_ASKABLE_TOOLS: &[&str] = &["Bash", "Edit", "Write"];
+
+/// The built-in tools the head agent's CLI defines, for `--tools`.
+///
+/// Its own (reading, plus whatever the person has said it may always do), what it can
+/// ask for, and the subagent tool when roles run natively. A native subagent can only use
+/// tools its session defines, so every native role's tools are defined here too. Nothing
+/// else is described to the model, which keeps every turn's prompt about 25k tokens
+/// smaller (measured: 36.4k → 11.2k).
+pub fn head_builtin_tools(head: &Role, native: &[Role], skills: bool) -> Vec<String> {
+    let mut tools = head.builtin_tools();
+    let more = HEAD_ASKABLE_TOOLS
+        .iter()
+        .map(|t| t.to_string())
+        .chain(native.iter().flat_map(Role::builtin_tools))
+        .chain((!native.is_empty()).then(|| "Agent".to_string()))
+        .chain(skills.then(|| "Skill".to_string()));
+    for tool in more {
+        if !tools.contains(&tool) {
+            tools.push(tool);
+        }
+    }
+    tools
+}
+
 /// A running head chat: the MCP server, the Claude process, and the event stream.
 pub struct Orchestrator {
     session: ClaudeSession,
@@ -225,7 +251,14 @@ impl Orchestrator {
         // servers are connected but not approved for the head: it stays a planner, and a
         // role that should use one lists its tools.
         let extras = harness.extras_snapshot().await;
-        let mut extra_args = Vec::new();
+        let native_roles: Vec<Role> = native
+            .iter()
+            .filter_map(|name| registry.roles.get(name).cloned())
+            .collect();
+        let mut extra_args = vec![format!(
+            "--tools={}",
+            head_builtin_tools(&role, &native_roles, extras.plugin_dir.is_some()).join(",")
+        )];
         if let Some(dir) = &extras.plugin_dir {
             extra_args.push("--plugin-dir".into());
             extra_args.push(dir.to_string_lossy().into_owned());
@@ -334,6 +367,35 @@ impl Orchestrator {
 mod tests {
     use super::*;
     use crate::engine::RoleInfo;
+
+    #[test]
+    fn the_head_defines_what_it_reads_asks_for_and_hands_to_subagents() {
+        let mut head = orchestrator_role(None, None);
+        // Something the person said it may always do.
+        head.tools.push("Bash(git status)".into());
+        let alone = head_builtin_tools(&head, &[], false);
+        assert_eq!(alone, ["Read", "Grep", "Glob", "Bash", "Edit", "Write"]);
+        assert!(
+            !alone.iter().any(|t| t.starts_with("mcp__")),
+            "MCP tools come from --mcp-config"
+        );
+
+        let mut builder = orchestrator_role(None, None);
+        builder.isolation = Isolation::Worktree;
+        builder.tools = vec!["Read".into(), "NotebookEdit".into(), "WebFetch".into()];
+        let with_native =
+            head_builtin_tools(&orchestrator_role_native(None, None), &[builder], true);
+        for tool in ["Agent", "NotebookEdit", "WebFetch", "Skill", "Bash"] {
+            assert!(
+                with_native.contains(&tool.to_string()),
+                "{tool} in {with_native:?}"
+            );
+        }
+        let mut sorted = with_native.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), with_native.len(), "no duplicates");
+    }
 
     fn fleet() -> Vec<RoleInfo> {
         vec![

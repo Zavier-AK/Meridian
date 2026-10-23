@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { DetectedBackend, Role, Worker, WorkerActivity } from "./types";
-import { totalInput } from "./types";
+import { compactTokens, totalInput } from "./types";
 
 type Props = {
   workers: Worker[];
@@ -235,6 +235,14 @@ export default function WorkerRail({
               {totalInput(worker.usage).toLocaleString()} in /{" "}
               {worker.usage.output_tokens.toLocaleString()} out
             </span>
+            {worker.promptTokens ? (
+              <span
+                className="worker-prompt"
+                title={`Its first request carried ${worker.promptTokens.toLocaleString()} tokens — instructions, tool definitions and context — which every later request reads again`}
+              >
+                {compactTokens(worker.promptTokens)} prompt
+              </span>
+            ) : null}
             {worker.revision ? (
               <span className="badge" title="Times it was sent back for another pass">
                 rev {worker.revision}

@@ -80,6 +80,17 @@ fn base_args(role: &Role, streaming_input: bool, ask_host: bool) -> Vec<String> 
     args
 }
 
+/// `--tools=…` for a worker: the built-ins its role can use, plus `Skill` when skills are
+/// installed. Written with `=` because `--tools` takes several values and would otherwise
+/// swallow the prompt that follows it (verified against the real CLI).
+fn tools_flag(role: &Role, skills: bool) -> String {
+    let mut tools = role.builtin_tools();
+    if skills {
+        tools.push("Skill".into());
+    }
+    format!("--tools={}", tools.join(","))
+}
+
 fn session_args(
     role: &Role,
     mcp_config: Option<&str>,
@@ -149,10 +160,14 @@ async fn pump_stdout(
     let stdout = child.stdout.take().context("claude child has no stdout")?;
     let mut lines = BufReader::new(stdout).lines();
     let mut summary = None;
+    let mut sizer = super::claude_stream::PromptSizer::default();
 
     while let Some(line) = lines.next_line().await? {
         match parse_line(run_id, &line) {
             Ok(parsed) => {
+                if let Some(size) = sizer.observe(run_id, &parsed) {
+                    let _ = sink.send(size);
+                }
                 for event in parsed.events.into_iter().filter_map(adapt) {
                     let _ = sink.send(event);
                 }
@@ -174,6 +189,7 @@ pub async fn run(spec: &WorkerSpec, sink: &EventSink) -> Result<RunOutcome> {
     // swallow the prompt as another config.
     let mut args = spec.extras.claude_args();
     args.extend(base_args(&spec.role, false, false));
+    args.push(tools_flag(&spec.role, spec.extras.plugin_dir.is_some()));
     match &spec.resume_session_id {
         // Carrying on: the brief and the files are already in the conversation.
         Some(session_id) => {
@@ -302,9 +318,13 @@ impl ClaudeSession {
 
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
+            let mut sizer = super::claude_stream::PromptSizer::default();
             while let Ok(Some(line)) = lines.next_line().await {
                 match parse_line(&pump_run_id, &line) {
                     Ok(parsed) => {
+                        if let Some(size) = sizer.observe(&pump_run_id, &parsed) {
+                            let _ = tx.send(size);
+                        }
                         if let Some(ask) = parsed.permission {
                             pump_pending
                                 .lock()
@@ -518,6 +538,22 @@ mod tests {
         assert_eq!(arg_value(&args, "--permission-prompts"), Some("none"));
         // One-shot workers are not fed on stdin.
         assert!(!args.iter().any(|a| a == "--input-format"));
+    }
+
+    #[test]
+    fn a_worker_is_given_only_its_own_built_in_tools() {
+        let builder = role(Isolation::Worktree, &["Edit", "Bash(npm test:*)"]);
+        assert_eq!(
+            tools_flag(&builder, false),
+            "--tools=Read,Grep,Glob,Edit,Bash"
+        );
+        // Skills need the tool that runs them.
+        assert_eq!(
+            tools_flag(&builder, true),
+            "--tools=Read,Grep,Glob,Edit,Bash,Skill"
+        );
+        // One argument, never a bare `--tools` that would take the prompt as a tool.
+        assert!(!tools_flag(&builder, false).contains(' '));
     }
 
     #[test]

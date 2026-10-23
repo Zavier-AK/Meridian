@@ -28,6 +28,26 @@ pub struct ParsedLine {
     pub backend_session_id: Option<String>,
     /// Set on a `can_use_tool` request: what answering it needs.
     pub permission: Option<PendingPermission>,
+    /// Set on the run's own (not a subagent's) assistant messages: everything the
+    /// request that produced it read, cached or not.
+    pub request_tokens: Option<u64>,
+}
+
+/// Turns the first request size seen on a stream into one [`HarnessEvent::PromptSize`].
+#[derive(Debug, Default)]
+pub struct PromptSizer {
+    reported: bool,
+}
+
+impl PromptSizer {
+    pub fn observe(&mut self, run_id: &str, parsed: &ParsedLine) -> Option<HarnessEvent> {
+        let tokens = parsed.request_tokens.filter(|_| !self.reported)?;
+        self.reported = true;
+        Some(HarnessEvent::PromptSize {
+            run_id: run_id.to_string(),
+            tokens,
+        })
+    }
 }
 
 /// A permission request waiting for the person, as the CLI sent it.
@@ -364,10 +384,12 @@ pub fn parse_line(run_id: &str, line: &str) -> Result<ParsedLine, String> {
             }
 
             if let Some(usage) = value.pointer("/message/usage") {
+                // Totals are carried on the result line and recorded there; this is only
+                // for the size of the request, and only for this run's own requests.
                 let usage = usage_from(usage);
-                if usage.total_input() > 0 || usage.output_tokens > 0 {
-                    // Carried on the result line too; recorded there to avoid double counting.
-                    tracing::trace!(?usage, "assistant usage");
+                let own = value.get("parent_tool_use_id").is_none_or(Value::is_null);
+                if own && usage.total_input() > 0 {
+                    out.request_tokens = Some(usage.total_input());
                 }
             }
         }
@@ -657,6 +679,30 @@ mod tests {
             }
             other => panic!("expected ApiRetry, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_first_request_of_a_run_is_reported_once_and_subagents_are_not_it() {
+        let own = |n: u64| {
+            format!(
+                r#"{{"type":"assistant","parent_tool_use_id":null,"message":{{"id":"m{n}","content":[],"usage":{{"input_tokens":2,"cache_creation_input_tokens":{n},"cache_read_input_tokens":6000,"output_tokens":4}}}}}}"#
+            )
+        };
+        let nested = r#"{"type":"assistant","parent_tool_use_id":"tu_1","message":{"content":[],"usage":{"input_tokens":2,"cache_read_input_tokens":90000,"output_tokens":4}}}"#;
+
+        assert_eq!(parse_line("w-1", nested).unwrap().request_tokens, None);
+
+        let mut sizer = PromptSizer::default();
+        let first = parse_line("w-1", &own(300)).unwrap();
+        assert_eq!(first.request_tokens, Some(6302));
+        assert!(matches!(
+            sizer.observe("w-1", &first),
+            Some(HarnessEvent::PromptSize { tokens: 6302, .. })
+        ));
+        // Later requests grow with the conversation; the first is the one that says
+        // what the run carries before doing anything.
+        let later = parse_line("w-1", &own(900)).unwrap();
+        assert!(sizer.observe("w-1", &later).is_none());
     }
 
     #[test]

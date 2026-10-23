@@ -27,9 +27,18 @@ default_role = "builder"
 #   copy  — gitignored files to bring in from the project root. Copied, never
 #           symlinked: a symlinked .env means a worker editing it rewrites the
 #           real one. Entries that do not exist are skipped.
-#   setup — shell commands run in the worktree, in order, after `copy`.
-#           Install dependencies here. Do NOT symlink node_modules from the
-#           project root; bundlers reject module paths outside the tree.
+#   clone — gitignored folders (dependencies, build output) to clone in from
+#           the project root before setup, so a worker starts with them already
+#           there. A copy-on-write clone: instant and free of extra disk on
+#           macOS (APFS) and on disks with reflinks; skipped where the disk
+#           can't clone, and setup installs as usual. Entries git doesn't
+#           ignore, or that don't exist, are skipped.
+#   setup — shell commands run in the worktree, in order, after `copy` and
+#           `clone`. Install dependencies here; with `clone`, prefer a command
+#           that tops up what's there (`npm install --prefer-offline`) over one
+#           that starts from nothing (`npm ci` deletes node_modules first).
+#           Do NOT symlink node_modules from the project root; bundlers reject
+#           module paths outside the tree.
 #
 # Each command gets `timeout_secs` (default 600) so a command that stops to ask
 # a question cannot hang the worker forever. A failing command fails the worker
@@ -41,6 +50,7 @@ default_role = "builder"
 
 [worktree]
 copy  = [".env", ".env.local"]
+clone = ["node_modules", ".venv", "target"]
 setup = []
 # setup = ["npm ci"]
 # timeout_secs = 600
