@@ -264,6 +264,22 @@ pub struct Workspaces {
     /// Held only across the metadata operation, which takes milliseconds. Workers
     /// themselves still run fully in parallel.
     git_lock: Arc<Mutex<()>>,
+    /// How `worktree.clone` entries are cloned: the program and its flags, before the
+    /// source and destination. Fixed per platform; replaceable in tests, where the disk
+    /// may not support clones at all.
+    clone_command: Vec<String>,
+}
+
+/// A copy-on-write copy that fails, rather than falling back to copying every byte,
+/// where the disk can't clone: a plain copy of `node_modules` or `target` can take
+/// longer than reinstalling, and disk the person didn't agree to spend.
+fn platform_clone_command() -> Vec<String> {
+    if cfg!(target_os = "macos") {
+        // `-c` clones with clonefile(2) on APFS.
+        vec!["cp".into(), "-c".into(), "-R".into()]
+    } else {
+        vec!["cp".into(), "-R".into(), "--reflink=always".into()]
+    }
 }
 
 impl Workspaces {
@@ -273,6 +289,7 @@ impl Workspaces {
             setup: WorktreeSetup::default(),
             shared_lock: Arc::new(Mutex::new(())),
             git_lock: Arc::new(Mutex::new(())),
+            clone_command: platform_clone_command(),
         }
     }
 
@@ -286,6 +303,12 @@ impl Workspaces {
 
     pub fn project_root(&self) -> &Path {
         &self.project_root
+    }
+
+    #[cfg(test)]
+    fn with_clone_command(mut self, command: &[&str]) -> Self {
+        self.clone_command = command.iter().map(|s| s.to_string()).collect();
+        self
     }
 
     /// A worktree this engine did not create — a native subagent's, made by our
@@ -349,11 +372,66 @@ impl Workspaces {
         Ok(())
     }
 
-    /// Copy declared files in, then run the project's setup commands.
+    /// Clone declared folders in, where the disk allows it. Never fatal: a clone is a
+    /// head start, and `setup` still runs after it.
+    async fn clone_in(&self, cwd: &Path) {
+        for entry in &self.setup.clone {
+            let from = self.project_root.join(entry);
+            let to = cwd.join(entry);
+            if !from.exists() || to.exists() {
+                continue;
+            }
+            // Only what git ignores: anything else would show up as the worker's change.
+            if git(&self.project_root, &["check-ignore", "-q", "--", entry])
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    "worktree.clone `{entry}` isn't ignored by git, so it wasn't cloned"
+                );
+                continue;
+            }
+            if let Some(parent) = to.parent() {
+                if tokio::fs::create_dir_all(parent).await.is_err() {
+                    continue;
+                }
+            }
+            let (program, flags) = self
+                .clone_command
+                .split_first()
+                .expect("a clone command has a program");
+            let cloned = Command::new(program)
+                .args(flags)
+                .arg(&from)
+                .arg(&to)
+                .output()
+                .await;
+            match cloned {
+                Ok(output) if output.status.success() => {}
+                other => {
+                    let reason = match other {
+                        Ok(output) => String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                        Err(error) => error.to_string(),
+                    };
+                    tracing::info!(
+                        "worktree.clone `{entry}` skipped — this disk can't clone: {reason}"
+                    );
+                    // A clone that failed part-way leaves a partial tree; setup is better
+                    // off starting from nothing.
+                    let _ = tokio::fs::remove_dir_all(&to).await;
+                    let _ = tokio::fs::remove_file(&to).await;
+                }
+            }
+        }
+    }
+
+    /// Clone and copy declared files in, then run the project's setup commands.
     ///
     /// Failure here is fatal to the worker on purpose: a builder that starts in a tree
     /// with no dependencies fails later anyway, with a far more confusing message.
     async fn bootstrap(&self, cwd: &Path) -> Result<()> {
+        self.clone_in(cwd).await;
+
         for entry in &self.setup.copy {
             let from = self.project_root.join(entry);
             if !from.exists() {
@@ -993,6 +1071,7 @@ mod tests {
             copy: vec![".env".into(), "missing.txt".into()],
             setup: vec!["echo installed > deps.txt".into()],
             timeout_secs: 60,
+            ..Default::default()
         };
         let (dir, workspaces) = scratch_repo_with(setup).await;
 
@@ -1033,12 +1112,123 @@ mod tests {
         );
     }
 
+    /// A project with an ignored `node_modules` and a tracked `vendor`, set up to clone
+    /// both with `command`.
+    async fn cloning_repo(command: &[&str]) -> (tempfile::TempDir, Workspaces) {
+        let setup = WorktreeSetup {
+            clone: vec![
+                "node_modules".into(),
+                "vendor".into(),
+                "scratch".into(),
+                "missing".into(),
+            ],
+            setup: vec![
+                "test -f node_modules/dep/index.js && echo yes > node_modules/.seen || true".into(),
+            ],
+            ..Default::default()
+        };
+        let (dir, workspaces) = scratch_repo_with(setup).await;
+        let root = dir.path();
+        tokio::fs::write(root.join(".gitignore"), "node_modules/\n")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(root.join("vendor"))
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("vendor/lib.js"), "tracked\n")
+            .await
+            .unwrap();
+        git(root, &["add", "-A"]).await.unwrap();
+        git(root, &["commit", "-q", "-m", "deps"]).await.unwrap();
+        // Untracked but not ignored: cloning it would make it the worker's change.
+        tokio::fs::create_dir_all(root.join("scratch"))
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("scratch/notes.txt"), "mine\n")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(root.join("node_modules/dep"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.join("node_modules/dep/index.js"),
+            "module.exports = 1;\n",
+        )
+        .await
+        .unwrap();
+        (dir, workspaces.with_clone_command(command))
+    }
+
+    #[tokio::test]
+    async fn ignored_folders_are_cloned_in_before_setup_and_stay_separate() {
+        // A plain recursive copy stands in for a clone: this test's disk may not do them.
+        let (dir, workspaces) = cloning_repo(&["cp", "-R"]).await;
+        let workspace = workspaces
+            .prepare("w-clone", Isolation::Worktree)
+            .await
+            .unwrap();
+
+        let cloned = workspace.cwd.join("node_modules/dep/index.js");
+        assert!(cloned.exists(), "node_modules should be cloned in");
+        assert!(
+            workspace.cwd.join("node_modules/.seen").exists(),
+            "setup runs after the clone, and sees it"
+        );
+        // A copy, not a link: the worker can't change the project's own.
+        tokio::fs::write(&cloned, "changed\n").await.unwrap();
+        let original = tokio::fs::read_to_string(dir.path().join("node_modules/dep/index.js"))
+            .await
+            .unwrap();
+        assert_eq!(original, "module.exports = 1;\n");
+        assert!(
+            !workspace.cwd.join("scratch").exists(),
+            "only ignored folders are cloned"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(workspace.cwd.join("vendor/lib.js"))
+                .await
+                .unwrap(),
+            "tracked\n",
+            "a tracked folder is the checkout's, not overwritten"
+        );
+        // Nothing cloned counts as the worker's change.
+        assert_eq!(workspace.diff().await.unwrap().files_changed, 0);
+    }
+
+    #[tokio::test]
+    async fn a_disk_that_cannot_clone_skips_it_and_setup_still_runs() {
+        let (_dir, workspaces) = cloning_repo(&["false"]).await;
+        let workspace = workspaces
+            .prepare("w-noclone", Isolation::Worktree)
+            .await
+            .unwrap();
+        assert!(
+            !workspace.cwd.join("node_modules").exists(),
+            "nothing half-made is left"
+        );
+        assert!(workspace.cwd.join("README.md").exists());
+
+        // And the platform's own command on whatever disk this runs on: cloned or
+        // skipped, never an error.
+        let (_dir, workspaces) = cloning_repo(
+            &platform_clone_command()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        )
+        .await;
+        workspaces
+            .prepare("w-platform", Isolation::Worktree)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn failed_setup_removes_the_half_built_worktree() {
         let setup = WorktreeSetup {
-            copy: Vec::new(),
             setup: vec!["exit 3".into()],
             timeout_secs: 60,
+            ..Default::default()
         };
         let (dir, workspaces) = scratch_repo_with(setup).await;
 

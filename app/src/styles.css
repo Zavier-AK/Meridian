@@ -1656,3 +1656,7 @@ button.repo-pick.active { border-color: var(--accent); background: var(--accent-
 .pill.bad { color: var(--error); border-color: rgba(255, 138, 148, 0.4); }
 button.pill.link-pill { cursor: pointer; color: var(--accent); }
 button.pill.link-pill:hover:not(:disabled) { background: var(--accent-soft); }
+
+/* Prompt size: what each request re-reads before any work. */
+.composer-prompt { color: var(--muted); font-size: 11px; }
+.worker-prompt { color: var(--muted); }

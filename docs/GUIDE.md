@@ -98,7 +98,9 @@ What stays the harness's job is everything around the subagent:
 
 Two findings shaped this. The head agent must not have a session-level deny list —
 subagents inherit it — so it is kept read-only by being approved for nothing but
-`Read`, `Grep`, `Glob` and `Agent`; anything else waits for you (below). And in an early run a
+`Read`, `Grep`, `Glob` and `Agent`; anything else waits for you (below). Its tool list
+includes every native role's tools, because a subagent can only use tools its session
+defines. And in an early run a
 head agent that had `Bash` copied a subagent's work straight into the checkout,
 skipping review, because the work "wasn't there". The brief now says outright that
 absence from the checkout is correct.
@@ -152,6 +154,40 @@ throwaway worktree means a model that writes anyway touches nothing real. `share
 silently destroy each other's work.
 
 See [`roles.toml`](../roles.toml) for the default fleet.
+
+### Starting a worktree quickly
+
+`git worktree add` checks out tracked files only: no `.env`, no `node_modules`, no build
+output. The `[worktree]` block in `roles.toml` fills that in, in this order:
+
+- `clone` brings in gitignored folders such as `node_modules`, `.venv` or `target` from
+  your checkout, as copy-on-write clones. On macOS (APFS) this is close to instant and
+  takes no extra disk. Each worker still gets its own copy, so it can't change yours. On a
+  disk that can't clone, the folder is skipped rather than copied byte by byte. Folders git
+  doesn't ignore are skipped too, so a clone never shows up in a worker's diff.
+- `copy` brings in single gitignored files, such as `.env`.
+- `setup` runs your commands, for example `npm install --prefer-offline`. After a clone,
+  that only tops up what's missing. Avoid `npm ci` here: it deletes `node_modules` first.
+
+## What each request costs
+
+A Claude agent's every request carries its instructions and the definitions of every
+tool it has, before any of the work. Claude reads that back from a cache for a tenth of
+the price, but it is still read on every request, and it still fills the context window.
+Meridian keeps it small:
+
+- **The head agent is one long-lived process**, so its setup is written to the cache once
+  per session, not once per message.
+- **Each agent gets only the built-in tools it can use** (`--tools`). A worker gets
+  `Read`, `Grep` and `Glob`, plus its role's own tools. The head agent also gets `Bash`,
+  `Edit` and `Write`, which it has to ask you before using, plus `Agent` and the tools
+  of any role it runs as a subagent. Leaving out the rest cut a builder's prompt from
+  36.4k to 8.4k tokens, measured with Claude Code 2.1.309. The same delegated task used
+  58% fewer input tokens, and the head's turn half as many.
+- **Sending work back resumes the worker's conversation**, which is still cached.
+
+The prompt size of each run shows on its worker card ("8.4k prompt"), and the head
+agent's beside its model in the chat box, so a change that makes it grow is visible.
 
 ## Verification before merge
 

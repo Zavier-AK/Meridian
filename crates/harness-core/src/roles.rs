@@ -73,6 +73,10 @@ impl Isolation {
     }
 }
 
+/// Built-in tools every Claude-backed role gets, whatever it lists: reading needs no
+/// approval, so these were always usable, and a role that can't look can't work.
+pub const BASELINE_TOOLS: &[&str] = &["Read", "Grep", "Glob"];
+
 /// Tools denied to readonly roles regardless of what the role config asks for.
 pub const READONLY_DENIED_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit", "MultiEdit"];
 
@@ -143,6 +147,27 @@ impl Role {
         }
     }
 
+    /// The built-in tools the CLI should define for this role, for `--tools`.
+    ///
+    /// `tools` only says what runs without asking; every other built-in is still
+    /// described to the model on every request. With no one to ask, a worker can't use
+    /// those anyway, so defining only these changes nothing it can do and drops roughly
+    /// 28k tokens from every request (measured: 36.4k → 8.4k for a builder).
+    ///
+    /// A rule such as `Bash(npm test:*)` defines `Bash`; MCP tools aren't built-ins and
+    /// are left to `--mcp-config`. Names the CLI doesn't know are ignored by it.
+    pub fn builtin_tools(&self) -> Vec<String> {
+        let mut tools: Vec<String> = BASELINE_TOOLS.iter().map(|t| t.to_string()).collect();
+        for rule in self.effective_tools() {
+            let name = rule.split('(').next().unwrap_or_default().trim();
+            if name.is_empty() || name.starts_with("mcp__") || tools.iter().any(|t| t == name) {
+                continue;
+            }
+            tools.push(name.to_string());
+        }
+        tools
+    }
+
     /// Tools to pass to `--disallowedTools`. Belt to `effective_tools`' braces: a role
     /// that never listed `Edit` still gets it explicitly denied, so a backend that
     /// enables tools by default can't sneak one in.
@@ -173,7 +198,18 @@ pub struct WorktreeSetup {
     #[serde(default)]
     pub copy: Vec<String>,
 
-    /// Shell commands run in the worktree, in order, after `copy`.
+    /// Gitignored folders to clone in from the project root, e.g. `node_modules` or
+    /// `target`, so a worker starts with dependencies and build output already there.
+    ///
+    /// A copy-on-write clone (APFS `clonefile` on macOS, a reflink elsewhere): instant
+    /// and taking no extra disk, and still a separate copy, so a worker can't change the
+    /// project's own. Where the disk can't clone, the entry is skipped rather than copied
+    /// in full, and `setup` installs as it would have anyway. Entries git doesn't ignore
+    /// are skipped too, so a clone can never turn up in a worker's diff.
+    #[serde(default)]
+    pub clone: Vec<String>,
+
+    /// Shell commands run in the worktree, in order, after `copy` and `clone`.
     ///
     /// Install dependencies here (`npm ci`, `uv sync`). Do not symlink `node_modules`
     /// from the project root: bundlers reject module paths outside the tree.
@@ -194,6 +230,7 @@ impl Default for WorktreeSetup {
     fn default() -> Self {
         Self {
             copy: Vec::new(),
+            clone: Vec::new(),
             setup: Vec::new(),
             timeout_secs: default_setup_timeout(),
         }
@@ -202,21 +239,31 @@ impl Default for WorktreeSetup {
 
 impl WorktreeSetup {
     pub fn is_empty(&self) -> bool {
-        self.copy.is_empty() && self.setup.is_empty()
+        self.copy.is_empty() && self.clone.is_empty() && self.setup.is_empty()
     }
 
     fn validate(&self) -> Result<()> {
-        for entry in &self.copy {
+        let lists = [("copy", &self.copy), ("clone", &self.clone)];
+        for (list, entry) in lists
+            .iter()
+            .flat_map(|(l, e)| e.iter().map(move |x| (l, x)))
+        {
             let path = Path::new(entry);
             if path.is_absolute() {
-                bail!("worktree.copy entry `{entry}` must be relative to the project root");
+                bail!("worktree.{list} entry `{entry}` must be relative to the project root");
             }
             // A `..` entry would pull files from outside the project into every worktree.
             if path
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
             {
-                bail!("worktree.copy entry `{entry}` may not escape the project root with `..`");
+                bail!("worktree.{list} entry `{entry}` may not escape the project root with `..`");
+            }
+            if path.as_os_str().is_empty()
+                || path.starts_with(".harness")
+                || path.starts_with(".git")
+            {
+                bail!("worktree.{list} entry `{entry}` names something that can't be copied in");
             }
         }
         if self.timeout_secs == 0 {
@@ -446,6 +493,32 @@ isolation = "none"
     }
 
     #[test]
+    fn only_the_tools_a_role_can_use_are_defined() {
+        let reg = RoleRegistry::from_toml(SAMPLE).unwrap();
+        // Rules become their tool; reading is always there.
+        let mut builder = reg.get("builder").unwrap().clone();
+        builder.tools = vec![
+            "Read".into(),
+            "Edit".into(),
+            "Bash(npm test:*)".into(),
+            "Bash(git status)".into(),
+            "mcp__github__get_issue".into(),
+        ];
+        assert_eq!(
+            builder.builtin_tools(),
+            ["Read", "Grep", "Glob", "Edit", "Bash"]
+        );
+
+        // Read-only: what isolation forbids is never defined, whatever was listed.
+        let tester = reg.get("tester").unwrap();
+        assert_eq!(tester.builtin_tools(), ["Read", "Grep", "Glob", "Bash"]);
+
+        // A role listing nothing can still look around.
+        let summarizer = reg.get("summarizer").unwrap();
+        assert_eq!(summarizer.builtin_tools(), ["Read", "Grep", "Glob"]);
+    }
+
+    #[test]
     fn worktree_roles_keep_their_tools() {
         let reg = RoleRegistry::from_toml(SAMPLE).unwrap();
         let builder = reg.get("builder").unwrap();
@@ -557,6 +630,22 @@ isolation = "worktree"
             registry.worktree.timeout_secs, 600,
             "should fall back to the default"
         );
+    }
+
+    #[test]
+    fn clone_entries_follow_the_same_rules_as_copy() {
+        let ok = RoleRegistry::from_toml(
+            "[worktree]\nclone = [\"node_modules\", \"target\"]\n\n[roles.b]\nprovider = \"claude\"\n",
+        )
+        .unwrap();
+        assert_eq!(ok.worktree.clone, ["node_modules", "target"]);
+        assert!(!ok.worktree.is_empty());
+
+        for bad in ["../elsewhere", "/abs", ".git", ".harness/worktrees"] {
+            let source =
+                format!("[worktree]\nclone = [\"{bad}\"]\n\n[roles.b]\nprovider = \"claude\"\n");
+            assert!(RoleRegistry::from_toml(&source).is_err(), "{bad}");
+        }
     }
 
     #[test]

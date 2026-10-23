@@ -77,6 +77,18 @@ output can merge anything.
 
 ### Working and verified
 
+- **Smaller prompts per agent** — measured with the real CLI (2.1.309, haiku):
+  - A builder's first request drops from 36.4k to 8.4k tokens with `--tools`.
+  - The same `run-worker` task went from 111.7k to 47.0k input tokens.
+  - A head turn that delegated went from 123k to 62k.
+  - Delegation through MCP, worker Bash/Edit, and a native subagent editing in its
+    worktree all still work.
+  - This build machine adds cloud-only tools to the default set, so expect a smaller
+    saving on a Mac; the prompt size on each worker card shows the real number there.
+- **`worktree.clone`** — tested with a stand-in copy command (cloned before setup,
+  separate from the original, ignored folders only) and with the real command on a disk
+  that can't clone (skipped, setup still runs). APFS clones themselves need a Mac.
+
 - **GitHub view and navigation rail** — repository discovery (project, submodules,
   nested repos), branch listing, create/switch/delete with their refusals, and path
   containment are tested against real git repositories. Pull requests are read with

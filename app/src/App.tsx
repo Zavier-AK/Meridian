@@ -114,6 +114,8 @@ export default function App() {
   const [signIn, setSignIn] = useState<{ problem: string | null } | null>(null);
   // The head agent's model, as its CLI reported it when it started.
   const [headModel, setHeadModel] = useState<string | null>(null);
+  // Tokens the head agent's first request carried: what each of its turns re-reads.
+  const [headPrompt, setHeadPrompt] = useState<number | null>(null);
   const [railCollapsed, setRailCollapsed] = useState(() => {
     try {
       return localStorage.getItem("harness.railCollapsed") === "1";
@@ -428,6 +430,14 @@ export default function App() {
         payload.project === session.project_root
       ) {
         setHeadModel(payload.model);
+        setHeadPrompt(null);
+      }
+      if (
+        payload.type === "prompt_size" &&
+        payload.run_id.startsWith("orchestrator-") &&
+        payload.project === session.project_root
+      ) {
+        setHeadPrompt(payload.tokens);
       }
       if (payload.type === "session_started" && payload.run_id.startsWith("orchestrator-")) {
         const failed = payload.mcp_failed ?? [];
@@ -1019,6 +1029,7 @@ export default function App() {
                 onUndo={(id) => void undoMerge(id)}
                 onPermission={(id, decision) => void answerPermission(id, decision)}
                 model={headModel}
+                promptTokens={headPrompt}
                 tools={<AutonomyDial level={autonomy} onChange={(level) => void changeAutonomy(level)} />}
                 mic={micButton}
                 needsFirstCommit={!hasCommits}
@@ -1400,6 +1411,13 @@ function reduceWorkers(
       const existing = prev[event.worker_id];
       if (!existing) return prev;
       return { ...prev, [event.worker_id]: { ...existing, status: event.status } };
+    }
+
+    case "prompt_size": {
+      // Workers run under their own id; anything else (the head, a reviewer) isn't one.
+      const existing = prev[event.run_id];
+      if (!existing) return prev;
+      return { ...prev, [event.run_id]: { ...existing, promptTokens: event.tokens } };
     }
 
     case "worker_revising": {
