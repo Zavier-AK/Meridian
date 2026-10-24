@@ -62,6 +62,10 @@ const BUNDLED: &[(&str, &str)] = &[
         "risky-changes",
         include_str!("../../../skills/risky-changes/SKILL.md"),
     ),
+    (
+        "meridian-plugins",
+        include_str!("../../../skills/meridian-plugins/SKILL.md"),
+    ),
 ];
 
 /// How deep an import looks for skill folders. Deep enough for a repository that groups
@@ -387,6 +391,48 @@ impl Extensions {
     /// and `headers`) for a remote one.
     pub fn set_mcp_server(&self, name: &str, config: serde_json::Value) -> Result<()> {
         check_server_name(name)?;
+        check_server_config(&config)?;
+        let mut state = self.load()?;
+        state.mcp_servers.insert(name.to_string(), config);
+        self.save(&state)
+    }
+
+    pub fn remove_mcp_server(&self, name: &str) -> Result<()> {
+        let mut state = self.load()?;
+        if state.mcp_servers.remove(name).is_none() {
+            bail!("there is no MCP server called `{name}`");
+        }
+        self.save(&state)
+    }
+
+    // --------------------------------------------------------------- plugin
+
+    /// Build (or reuse) the plugin holding every enabled skill, and return what a Claude
+    /// process needs. No enabled skills means no plugin at all.
+    pub fn worker_extras(&self) -> Result<WorkerExtras> {
+        self.worker_extras_with(&[])
+    }
+
+    /// The same, with what enabled Meridian plugins add: their skills, as
+    /// `<plugin>-<skill>`, and their MCP servers, as `<plugin>-<server>`.
+    pub fn worker_extras_with(&self, plugins: &[crate::plugins::Plugin]) -> Result<WorkerExtras> {
+        let state = self.load()?;
+        let mut mcp_servers = state.mcp_servers.clone();
+        for (name, config) in crate::plugins::mcp_servers(plugins) {
+            mcp_servers.entry(name).or_insert(config);
+        }
+        Ok(WorkerExtras {
+            plugin_dir: self.build_plugin(&state, &crate::plugins::skill_dirs(plugins))?,
+            mcp_servers,
+        })
+    }
+}
+
+/// A server's config, in Claude Code's own `mcpServers` shape: `command` (with optional
+/// `args` and `env`) for a local process, or `url` (with optional `type` and `headers`)
+/// for a remote one.
+pub fn check_server_config(config: &serde_json::Value) -> Result<()> {
+    {
         let object = config
             .as_object()
             .context("a server's config must be an object")?;
@@ -409,32 +455,16 @@ impl Extensions {
                 bail!("`args` must be a list of strings");
             }
         }
-        let mut state = self.load()?;
-        state.mcp_servers.insert(name.to_string(), config);
-        self.save(&state)
     }
+    Ok(())
+}
 
-    pub fn remove_mcp_server(&self, name: &str) -> Result<()> {
-        let mut state = self.load()?;
-        if state.mcp_servers.remove(name).is_none() {
-            bail!("there is no MCP server called `{name}`");
-        }
-        self.save(&state)
-    }
-
-    // --------------------------------------------------------------- plugin
-
-    /// Build (or reuse) the plugin holding every enabled skill, and return what a Claude
-    /// process needs. No enabled skills means no plugin at all.
-    pub fn worker_extras(&self) -> Result<WorkerExtras> {
-        let state = self.load()?;
-        Ok(WorkerExtras {
-            plugin_dir: self.build_plugin(&state)?,
-            mcp_servers: state.mcp_servers,
-        })
-    }
-
-    fn build_plugin(&self, state: &State) -> Result<Option<PathBuf>> {
+impl Extensions {
+    fn build_plugin(
+        &self,
+        state: &State,
+        plugin_skills: &[(String, PathBuf)],
+    ) -> Result<Option<PathBuf>> {
         let mut files: Vec<(String, PathBuf, Vec<u8>)> = Vec::new();
         for (name, body) in BUNDLED {
             if !state.disabled_skills.contains(*name) {
@@ -450,6 +480,12 @@ impl Extensions {
                 continue;
             }
             for relative in list_files(&dir)? {
+                let bytes = std::fs::read(dir.join(&relative))?;
+                files.push((name.clone(), relative, bytes));
+            }
+        }
+        for (name, dir) in plugin_skills {
+            for relative in list_files(dir)? {
                 let bytes = std::fs::read(dir.join(&relative))?;
                 files.push((name.clone(), relative, bytes));
             }
@@ -667,7 +703,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let skills = Extensions::new(dir.path()).skills().unwrap();
         let names: Vec<_> = skills.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["worktree", "review", "risky-changes"]);
+        assert_eq!(
+            names,
+            ["worktree", "review", "risky-changes", "meridian-plugins"]
+        );
         assert!(skills
             .iter()
             .all(|s| s.enabled && s.source == SkillSource::Bundled));
@@ -727,7 +766,7 @@ mod tests {
     fn no_enabled_skills_means_no_plugin() {
         let dir = tempfile::tempdir().unwrap();
         let extensions = Extensions::new(dir.path());
-        for name in ["worktree", "review", "risky-changes"] {
+        for name in ["worktree", "review", "risky-changes", "meridian-plugins"] {
             extensions.set_skill_enabled(name, false).unwrap();
         }
         assert!(extensions.worker_extras().unwrap().plugin_dir.is_none());

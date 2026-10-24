@@ -31,7 +31,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-src meridian-plugin: http://meridian-plugin.localhost"
     },
     "macOSPrivateApi": true
   },

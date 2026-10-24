@@ -906,14 +906,94 @@ because the two numbers measure different things and have drifted apart before.
   unrecognized lines yield no events rather than failing a run, and parsing is covered by
   fixture tests.
 
+## Plugins
+
+A plugin is a folder with a `meridian-plugin.toml`. It can add:
+
+- **skills**, in `skills/<name>/SKILL.md`, which every agent sees as
+  `harness:<plugin>-<name>`;
+- **tools for the agents**, as MCP servers, named `<plugin>-<server>`;
+- **commands**, under the **Plugins** button in the chat box. A command either runs
+  something in the project folder (its output appears in the chat) or puts a prompt in
+  the chat box for you to send;
+- **hooks**, which run by themselves when something happens, such as a merge landing or a
+  worker finishing. The event arrives as JSON on the hook's stdin;
+- **panels**, which are tabs of their own next to Chat, Plan and Flow.
+
+**Where plugins live.** Installed plugins (from a folder or a git repository, in **Tools &
+Skills → Plugins**) apply to every project. A project's own plugins live in its
+`.meridian/plugins/`, versioned with its code. To have one built, describe it in the
+**Make it** box. The head agent has a builder write it, using the bundled
+`meridian-plugins` skill for the format, and it comes back for review like any other
+change.
+
+**Nothing runs until you turn it on.** **Review and turn on** lists every command,
+hook and agent tool the plugin brings, with exactly what each one runs. Approval is of
+the plugin's exact contents, as a SHA-256 digest of every file. If anything in it changes
+(a pull, a landed change, an edit), it's off again until you approve it again. A cloned
+repository's plugins therefore never run just because you opened the project. Approving a
+project's plugin covers that project only.
+
+**Panels are sandboxed.** A panel is a page in a frame with scripts but no access to the
+app, its other pages, or cookies. It reaches Meridian only through a small bridge it
+loads as `__meridian.js`:
+
+```js
+await Meridian.context();        // the project, its workers and its repositories
+Meridian.on((event) => { … });   // every engine event, as it happens
+await Meridian.run("lint");      // one of its own plugin's commands → { exit_code, output }
+Meridian.ask("…");               // puts text in the chat box; you send it
+```
+
+Its files are served only while the plugin is on, never from outside its folder. The page
+can't load other frames, and its fetches are limited to https.
+
+**Where state goes.** Commands and hooks run in the project folder with
+`$MERIDIAN_PLUGIN_DIR` (the plugin) and `$MERIDIAN_PLUGIN_DATA` (a folder of its own in
+the app's data folder) set. Keep state in the data folder: writing into the plugin's own
+files changes it, which turns it off.
+
+![The example plugin's Board tab, showing the session's workers and repositories, with a git status it ran](screenshots/plugin-board.png)
+
+A full example ships in [`examples/plugins/session-board`](../examples/plugins/session-board):
+a board tab, a `git status` command, a stand-up prompt, a hook that logs every landed
+merge, and a skill. The manifest format:
+
+```toml
+name = "lint-guard"                       # = its folder's name
+title = "Lint guard"
+description = "Lint before landing."
+
+[[commands]]
+id = "lint"
+title = "Run lint"
+run = "npm run lint"                      # or: prompt = "…"
+
+[[hooks]]
+on = ["merge_landed"]
+run = "npm run lint -- --quiet"
+
+[[panels]]
+id = "report"
+title = "Lint"
+entry = "panel/index.html"
+
+[mcp_servers.eslint]
+command = "npx"
+args = ["-y", "some-eslint-mcp"]
+```
+
+The CLI's agents get the skills and tools of every plugin that's turned on, too.
+
 ## Tools & Skills, and Settings
 
-Two views sit behind the icons at the foot of the project sidebar.
+Two views sit behind the icons at the foot of the navigation rail.
 
 **Tools & Skills** holds what the fleet can use:
 
-- **Skills.** A library shared by every project. Three are built in: `worktree`,
-  `review` and `risky-changes`. You can add your own from a folder, from a git
+- **Plugins**, above. See [Plugins](#plugins).
+- **Skills.** A library shared by every project. Four are built in: `worktree`,
+  `review`, `risky-changes` and `meridian-plugins`. You can add your own from a folder, from a git
   repository (every folder with a `SKILL.md` in it is imported, with its source kept
   for credit), or as a blank skill to write. Each one can be switched off.
 - **Tools, by role.** Each role's allow-list for the open project. Rules can be

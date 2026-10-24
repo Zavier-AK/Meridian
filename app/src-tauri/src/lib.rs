@@ -5,6 +5,7 @@
 //! commands the UI calls. Keeping it this small is what lets the same engine be driven
 //! headlessly by `harness-cli` and tested without a desktop.
 
+mod plugins;
 mod preview_probe;
 mod settings;
 mod voice;
@@ -230,6 +231,7 @@ fn forward_events(
     tokio::spawn(async move {
         while let Some(event) = events.recv().await {
             harness.note_event(&event).await;
+            plugins::fire_hooks(harness.workspaces().project_root(), &event);
             match &event {
                 HarnessEvent::VerificationFinished { worker_id, report } => {
                     tell_head_about_failed_checks(&app, &project, worker_id, report).await;
@@ -587,7 +589,7 @@ async fn start_session(
         let mut projects = state.projects.lock().await;
         if let Some(session) = projects.get_mut(&key) {
             if !session.is_live() {
-                session.harness.set_extras(current_extras()).await;
+                load_extras(&session.harness).await;
                 let (orchestrator, events) = Orchestrator::start(
                     Arc::clone(&session.harness),
                     &session.project_root,
@@ -659,7 +661,7 @@ async fn start_session(
         session_id.clone(),
         tx,
     ));
-    harness.set_extras(current_extras()).await;
+    load_extras(&harness).await;
     harness
         .set_autonomy(harness_core::autonomy::load(&project))
         .await;
@@ -1443,7 +1445,7 @@ async fn reconnect_head(
             tracing::warn!("head agent did not shut down cleanly: {error:#}");
         }
     }
-    session.harness.set_extras(current_extras()).await;
+    load_extras(&session.harness).await;
     let resume = session
         .harness
         .resumable_backend_session()
@@ -1830,7 +1832,7 @@ async fn focus_project(
 
     let session = projects.get_mut(&key).ok_or("that project is not open")?;
     if !session.is_live() {
-        session.harness.set_extras(current_extras()).await;
+        load_extras(&session.harness).await;
         let resume = session
             .harness
             .resumable_backend_session()
@@ -1976,9 +1978,15 @@ fn extensions() -> Result<Extensions, String> {
         .ok_or_else(|| "no home directory to keep skills in".to_string())
 }
 
-/// The current skills and servers. A broken library costs the skills, not the session.
-fn current_extras() -> WorkerExtras {
-    match extensions().and_then(|ext| ext.worker_extras().map_err(|e| format!("{e:#}"))) {
+/// The current skills and servers, with what the project's enabled plugins add. A broken
+/// library costs the skills, not the session.
+fn current_extras(project_root: Option<&std::path::Path>) -> WorkerExtras {
+    let enabled = project_root.map(plugins::enabled).unwrap_or_default();
+    let built = extensions().and_then(|ext| {
+        ext.worker_extras_with(&enabled)
+            .map_err(|e| format!("{e:#}"))
+    });
+    match built {
         Ok(extras) => extras,
         Err(error) => {
             tracing::warn!("skills and MCP servers not loaded: {error}");
@@ -1987,12 +1995,17 @@ fn current_extras() -> WorkerExtras {
     }
 }
 
+/// Give a project's harness its current extras.
+async fn load_extras(harness: &Harness) {
+    let extras = current_extras(Some(harness.workspaces().project_root()));
+    harness.set_extras(extras).await;
+}
+
 /// Hand the changed set to every open project, so its next worker gets it. Head agents
 /// pick it up when they next start: a running process cannot load a plugin.
 async fn apply_extras(state: &AppState) {
-    let extras = current_extras();
     for session in state.projects.lock().await.values() {
-        session.harness.set_extras(extras.clone()).await;
+        load_extras(&session.harness).await;
     }
 }
 
@@ -2189,6 +2202,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(voice::hotkey_plugin())
+        // Plugin panels, each at its own token, only while its plugin is on.
+        .register_asynchronous_uri_scheme_protocol("meridian-plugin", |_ctx, request, responder| {
+            std::thread::spawn(move || responder.respond(plugins::serve(&request)));
+        })
         .setup(|app| {
             app.manage(AppState::default());
             let stored = settings::load();
@@ -2208,7 +2225,7 @@ pub fn run() {
             // Older plugin builds are safe to drop only now, before any worker can be
             // reading one.
             if let Ok(ext) = extensions() {
-                let current = current_extras().plugin_dir;
+                let current = current_extras(None).plugin_dir;
                 ext.prune_plugins(current.as_deref());
             }
             Ok(())
@@ -2222,6 +2239,12 @@ pub fn run() {
             changes_overview,
             claude_account,
             claude_sign_in,
+            plugins::plugins_list,
+            plugins::plugin_set_enabled,
+            plugins::plugin_install,
+            plugins::plugin_uninstall,
+            plugins::plugin_run_command,
+            plugins::plugin_panel,
             github_overview,
             github_branches,
             github_pull_requests,

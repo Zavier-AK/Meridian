@@ -25,6 +25,7 @@ rmcp = { version = "3", features = [
     "transport-streamable-http-server", "transport-streamable-http-server-session",
 ] }
 schemars = "1"
+sha2 = "0.10"
 tower-service = "0.3"
 
 [dev-dependencies]

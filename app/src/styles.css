@@ -1660,3 +1660,56 @@ button.pill.link-pill:hover:not(:disabled) { background: var(--accent-soft); }
 /* Prompt size: what each request re-reads before any work. */
 .composer-prompt { color: var(--muted); font-size: 11px; }
 .worker-prompt { color: var(--muted); }
+
+/* ---------- plugins ---------- */
+
+.plugin-panel { flex: 1; min-height: 0; display: flex; padding: 0; }
+.plugin-frame { flex: 1; width: 100%; height: 100%; border: none; background: #1b151e; }
+.plugin-panel-error { padding: 20px; }
+.pane-tabs .plugin-tab { font-style: normal; }
+.plugin-commands { position: relative; }
+.plugin-commands .composer-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: none; background: transparent; color: var(--muted);
+  padding: 6px 10px; border-radius: 999px; font-size: 13px; white-space: nowrap;
+}
+.plugin-commands .composer-pill:hover:not(:disabled), .plugin-commands .composer-pill.open { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+.plugin-commands-menu {
+  position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 30;
+  list-style: none; margin: 0; padding: 6px; min-width: 260px; max-height: 320px; overflow-y: auto;
+  border-radius: 16px; border: 1px solid var(--border-strong);
+  background: linear-gradient(var(--panel-strong), var(--panel-strong)), #1b151e;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+.plugin-commands-menu button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  padding: 8px 10px; border: none; border-radius: 10px; background: none; color: var(--text); text-align: left;
+}
+.plugin-commands-menu button:hover:not(:disabled) { background: var(--accent-soft); }
+.plugin-command-title { font-size: 13px; }
+.plugin-command-meta { font-size: 11px; }
+details.plugin-output summary { cursor: pointer; }
+details.plugin-output pre {
+  margin: 8px 0 0; max-height: 280px; overflow: auto; white-space: pre-wrap;
+  font-size: 11.5px; color: var(--text);
+}
+.plugin-row-head { display: flex; align-items: center; gap: 8px; width: 100%; flex-wrap: wrap; }
+.plugin-row-actions { margin-left: auto; display: flex; gap: 6px; }
+.plugin-row-actions button { font-size: 12px; padding: 4px 10px; }
+.plugin-version { font-size: 11px; }
+.plugin-row.broken { border-color: rgba(255, 138, 148, 0.35); }
+.plugin-row.changed { border-color: rgba(243, 198, 124, 0.4); }
+.ok-text { color: var(--ok); }
+.warn-text { color: var(--warn); }
+.plugin-approval {
+  display: flex; flex-direction: column; gap: 4px; width: 100%;
+  padding: 10px 12px; margin-top: 4px; border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22); border: 1px solid var(--border);
+}
+.plugin-approval ul { margin: 0 0 4px; padding-left: 18px; font-size: 12px; }
+.plugin-approval code { font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.make-plugin input { flex: 1 1 320px; }
+/* Inside a settings card, a plain list, not more cards. */
+.settings-list li .plugin-approval li {
+  display: list-item; padding: 0; border: none; background: none; border-radius: 0;
+}

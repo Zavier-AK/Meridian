@@ -28,6 +28,9 @@ instead of API billing, and local models cost nothing.
   *Land most* (verified, low-risk changes land by themselves).
 - **Plans and night shifts.** Multi-step work goes on a plan board you approve first. A
   night shift runs experiments overnight and keeps only the ones that improve a metric.
+- **Extend it.** Plugins add skills, agent tools, one-click commands, hooks and tabs of
+  their own. Describe one and an agent builds it. Nothing a plugin runs is allowed until
+  you've reviewed it. See [plugins](docs/GUIDE.md#plugins).
 - **Talk to it.** Hold ⌥Space anywhere: "what's waiting for me?", "merge the builder's
   change", "find me a cheaper flight". Web tasks run in their own browser and always ask
   before sending, buying or posting.
@@ -111,6 +114,7 @@ your OpenRouter key and nothing else.
   [voice](docs/GUIDE.md#talk-to-it),
   [local models](docs/GUIDE.md#attaching-a-local-model),
   [OpenRouter](docs/GUIDE.md#openrouter),
+  [plugins](docs/GUIDE.md#plugins),
   [sign-in problems](docs/GUIDE.md#when-claudes-sign-in-fails).
 - **[Project status](docs/STATUS.md)** — what's verified, what isn't, and what's next.
 
