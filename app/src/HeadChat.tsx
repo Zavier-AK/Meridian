@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatItem, PermissionDecision } from "./types";
 import { compactTokens } from "./types";
+import { MeridianMark } from "./Brand";
 
 type Props = {
   items: ChatItem[];
@@ -187,6 +188,13 @@ export default function HeadChat({
             <span className="dot" />
             <span className="dot" />
             <span className="dot" />
+          </div>
+        )}
+        {!items.some((item) => item.kind === "user" || item.kind === "assistant") && (
+          <div className="chat-welcome">
+            <MeridianMark size={56} />
+            <span>Ready when you are.</span>
+            <span className="muted">Describe what you want built. The head agent plans it and hands it to the fleet.</span>
           </div>
         )}
         <div ref={endRef} />

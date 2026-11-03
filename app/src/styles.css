@@ -134,7 +134,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
   border-radius: var(--radius);
   padding: 28px;
 }
-.gate-card h1 { margin: 0 0 6px; font-size: 22px; }
+.gate-brand { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.gate-card h1 { margin: 0; font-size: 22px; display: inline-flex; align-items: center; gap: 8px; }
 .gate-card p { margin: 0 0 18px; }
 .gate-card label { display: block; font-weight: 600; margin-bottom: 6px; }
 .gate-card button.wide { margin-top: 16px; }
@@ -155,7 +156,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
-.title { font-weight: 650; }
+.title { font-weight: 650; display: inline-flex; align-items: center; gap: 7px; }
 /* Where the window is dragged from when there is no title bar. */
 .window-drag { position: fixed; top: 0; left: 0; right: 0; height: 32px; z-index: 5; }
 .add-project .window-drag { display: none; } /* the start screen shown as a dialog */
@@ -1788,3 +1789,15 @@ label.theme-colour input[type="color"] {
 label.theme-colour input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 label.theme-colour input[type="color"]::-webkit-color-swatch { border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 10px; }
 button.theme-colour-reset { font-size: 12px; padding: 2px 6px; }
+
+/* ---------- brand ---------- */
+
+/* The mark is drawn in currentColor: the accent, so it follows the theme. */
+.meridian-mark { flex: none; display: block; color: var(--accent); }
+.chat-welcome {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
+  margin: 10vh auto 0; max-width: 380px; font-size: 15px;
+}
+.chat-welcome .meridian-mark { margin-bottom: 10px; opacity: 0.9; }
+.chat-welcome .muted { font-size: 12px; }
+.notes-empty { margin: 0; padding: 8px; font-size: 12px; }

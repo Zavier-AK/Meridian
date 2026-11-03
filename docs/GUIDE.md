@@ -321,6 +321,9 @@ second accent to yellow".
 
 ![Meridian in the Ember theme: a black base with orange and gold accents](screenshots/theme-ember.png)
 
+Meridian's mark, a round mind divided into rooms (one per agent), is drawn in the
+accent, so it follows the theme too. Only the app icon keeps fixed colours.
+
 ## When Claude's sign-in fails
 
 If a Claude run fails to sign in ("OAuth token has expired", "could not be refreshed"),

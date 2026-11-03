@@ -18,6 +18,7 @@ import ToolsView from "./ToolsView";
 import AutonomyDial, { nextStop } from "./AutonomyDial";
 import PlanBoard from "./PlanBoard";
 import NotesView from "./NotesView";
+import { MeridianMark } from "./Brand";
 import PluginPanel, { type PanelContext } from "./PluginPanel";
 import PluginCommands from "./PluginCommands";
 import NightView from "./NightView";
@@ -952,6 +953,7 @@ export default function App() {
           buttons in it stay buttons. */}
       <header className="titlebar" data-tauri-drag-region>
         <span className="title" data-tauri-drag-region>
+          <MeridianMark size={18} />
           Meridian
         </span>
         <span className="titlebar-project" data-tauri-drag-region title={session.project_root}>

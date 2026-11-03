@@ -1,3 +1,5 @@
+<img src="docs/screenshots/icon.png" width="96" alt="Meridian's icon: a white disc divided into rounded cells, on dark teal">
+
 # Meridian
 
 **A Mac app for running a team of coding agents on the subscriptions you already pay for.**
