@@ -1713,3 +1713,46 @@ details.plugin-output pre {
 .settings-list li .plugin-approval li {
   display: list-item; padding: 0; border: none; background: none; border-radius: 0;
 }
+
+/* ---------- notes ---------- */
+
+.notes-view {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px;
+  padding: 20px 24px 20px; background: var(--panel);
+}
+.notes-view .settings-head h2 { color: var(--text); }
+.notes-intro { margin: 0; font-size: 12px; line-height: 1.5; }
+.notes-intro .mono { margin-left: 4px; }
+.notes-intro code { font-family: var(--mono); font-size: 11px; }
+.notes-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; }
+.notes-list { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+@media (max-width: 720px) {
+  .notes-view { padding: 16px; }
+  .notes-view .settings-head { flex-wrap: wrap; gap: 8px; }
+  .notes-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .notes-list { max-height: 30vh; }
+}
+.notes-group { display: flex; flex-direction: column; gap: 2px; }
+.notes-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 4px 8px; }
+button.notes-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%;
+  padding: 7px 10px; border: none; border-radius: 10px; background: none; color: var(--text); text-align: left;
+}
+button.notes-item:hover:not(:disabled) { background: var(--accent-soft); }
+button.notes-item.active { background: var(--accent-soft); color: var(--accent); }
+.notes-item-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.notes-item-meta { font-size: 11px; }
+.notes-page {
+  min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 18px; border-radius: 14px; border: 1px solid var(--border); background: rgba(0, 0, 0, 0.18);
+}
+.notes-page-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.notes-rendered { font-size: 13px; line-height: 1.55; color: var(--text); }
+.notes-rendered h1 { font-size: 18px; margin: 4px 0 10px; }
+.notes-rendered h2 { font-size: 14px; margin: 16px 0 6px; }
+.notes-rendered code { font-family: var(--mono); font-size: 12px; padding: 1px 5px; border-radius: 5px; background: rgba(0, 0, 0, 0.25); }
+.notes-editor {
+  flex: 1; min-height: 320px; width: 100%; resize: none; font-size: 12.5px; line-height: 1.5;
+  padding: 12px; border-radius: 10px;
+}
+.note-saved { display: flex; justify-content: space-between; align-items: center; gap: 10px; }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { AppSettings, VoiceSettings } from "./types";
 import VoiceSettingsPanel from "./VoiceSettings";
 import { FONTS, applyFont } from "./fonts";
@@ -132,6 +133,52 @@ export default function SettingsView({ onSaved, onClose }: Props) {
       <div className="settings-section">
         <h3>Claude sign-in</h3>
         <SignInPanel problem={null} inline />
+      </div>
+
+      <div className="settings-section">
+        <h3>Notes</h3>
+        <p className="muted">
+          What agents learn in one project, kept for the next: decisions, conventions, gotchas.
+          Only your <code>me.md</code> and the current project's note are given to the head agent up
+          front, cut to a short page; it searches the rest when it's relevant. Plain markdown, so
+          the folder opens as an Obsidian vault too.
+        </p>
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={settings.notes?.enabled ?? true}
+            onChange={(event) =>
+              update({ notes: { enabled: event.target.checked, folder: settings.notes?.folder ?? null } })
+            }
+          />
+          <span>Keep notes between projects</span>
+        </label>
+        <div className="inline-form">
+          <input
+            className="grow mono"
+            value={settings.notes?.folder ?? ""}
+            onChange={(event) =>
+              update({ notes: { enabled: settings.notes?.enabled ?? true, folder: event.target.value || null } })
+            }
+            placeholder="~/Documents/Meridian Notes"
+            aria-label="Notes folder"
+            spellCheck={false}
+          />
+          <button
+            onClick={async () => {
+              const picked = await openDialog({ directory: true, multiple: false, title: "Choose a notes folder" });
+              if (typeof picked === "string") {
+                update({ notes: { enabled: settings.notes?.enabled ?? true, folder: picked } });
+              }
+            }}
+          >
+            Choose…
+          </button>
+        </div>
+        <p className="muted">
+          An Obsidian vault works: pick a folder inside it, such as <code>Vault/Meridian</code>, so agents
+          only ever see and write their own notes.
+        </p>
       </div>
 
       <OpenRouterSettings

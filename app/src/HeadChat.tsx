@@ -11,6 +11,8 @@ type Props = {
   onStop: () => void;
   onSelectWorker: (id: string) => void;
   onUndo: (workerId: string) => void;
+  /** Open a note an agent saved. */
+  onOpenNote?: (path: string) => void;
   /** Words said for the head agent: added to the box to edit and send, never sent. */
   dictated?: { text: string; at: number } | null;
   /** Changes when voice says "send it": the draft is handed to `onDraftForVoice`. */
@@ -59,6 +61,7 @@ export default function HeadChat({
   onStop,
   onSelectWorker,
   onUndo,
+  onOpenNote,
   dictated,
   sendDraft,
   onDraftForVoice,
@@ -140,6 +143,19 @@ export default function HeadChat({
               return (
                 <div key={i} className={`notice ${item.tone}`}>
                   {item.text}
+                </div>
+              );
+            case "note":
+              return (
+                <div key={i} className="notice info note-saved">
+                  <span>
+                    {item.created ? "Started a note" : "Updated a note"}: <span className="mono">{item.path}</span>
+                  </span>
+                  {onOpenNote && (
+                    <button className="link" onClick={() => onOpenNote(item.path)}>
+                      Open
+                    </button>
+                  )}
                 </div>
               );
             case "output":

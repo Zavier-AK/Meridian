@@ -264,7 +264,8 @@ fn forward_events(
                 HarnessEvent::PlanFinished { title, outcome, .. } => {
                     tell_head(&app, &project, &format!(
                         "The plan \"{title}\" has finished. Step by step: {outcome}. Tell the person \
-                         where that leaves the work, and what, if anything, is still to do."
+                         where that leaves the work, and what, if anything, is still to do. If it \
+                         settled something a later session would need, note it with notes_write."
                     ))
                     .await;
                 }
@@ -662,6 +663,7 @@ async fn start_session(
         tx,
     ));
     load_extras(&harness).await;
+    harness.set_notes(settings::load().notes.notes()).await;
     harness
         .set_autonomy(harness_core::autonomy::load(&project))
         .await;
@@ -1915,7 +1917,103 @@ fn save_settings(
     harness_core::openrouter::set_models(settings.openrouter_models.clone());
     // The hotkey follows the settings at once: turned on, off, or changed.
     voice::apply_hotkey(&app, &settings.voice)?;
+    // So do the notes tools; head agents pick up the brief when they next start.
+    let notes = settings.notes.notes();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        for session in state.projects.lock().await.values() {
+            session.harness.set_notes(notes.clone()).await;
+        }
+    });
     Ok(settings)
+}
+
+// -------------------------------------------------------------------- notes
+
+fn notes() -> Result<harness_core::notes::Notes, String> {
+    settings::load()
+        .notes
+        .notes()
+        .ok_or_else(|| "notes are turned off in Settings".to_string())
+}
+
+#[derive(Serialize)]
+struct NotesView {
+    folder: String,
+    notes: Vec<harness_core::notes::NoteInfo>,
+}
+
+#[tauri::command]
+fn notes_list() -> Result<NotesView, String> {
+    let notes = notes()?;
+    notes.ensure().map_err(|e| format!("{e:#}"))?;
+    Ok(NotesView {
+        folder: notes.root().display().to_string(),
+        notes: notes.list(),
+    })
+}
+
+#[tauri::command]
+fn note_read(path: String) -> Result<String, String> {
+    notes()?.read(&path).map_err(|e| format!("{e:#}"))
+}
+
+/// The person's own edit, to any note, `me.md` included.
+#[tauri::command]
+fn note_save(app: AppHandle, path: String, content: String) -> Result<(), String> {
+    notes()?
+        .write(&path, &content, harness_core::notes::WriteMode::Replace)
+        .map_err(|e| format!("{e:#}"))?;
+    let _ = app.emit("harness://changed", "notes");
+    Ok(())
+}
+
+/// Show the folder in Finder, or open it (or one note) in Obsidian.
+#[tauri::command]
+async fn notes_open(path: Option<String>, obsidian: bool) -> Result<(), String> {
+    let notes = notes()?;
+    notes.ensure().map_err(|e| format!("{e:#}"))?;
+    let target = match &path {
+        Some(relative) => {
+            notes.read(relative).map_err(|e| format!("{e:#}"))?;
+            notes.root().join(relative)
+        }
+        None => notes.root().to_path_buf(),
+    };
+    if !obsidian {
+        let folder = if target.is_dir() {
+            target
+        } else {
+            notes.root().to_path_buf()
+        };
+        return harness_core::voice::computer::open(
+            &harness_core::voice::computer::Opening::Folder(folder),
+        )
+        .await
+        .map_err(|e| format!("{e:#}"));
+    }
+    let encoded: String = target
+        .display()
+        .to_string()
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                (b as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect();
+    let status = tokio::process::Command::new("open")
+        .arg(format!("obsidian://open?path={encoded}"))
+        .status()
+        .await
+        .map_err(|e| format!("couldn't run open: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Obsidian didn't open: is it installed?".into())
+    }
 }
 
 // --------------------------------------------------------------- openrouter
@@ -2239,6 +2337,10 @@ pub fn run() {
             changes_overview,
             claude_account,
             claude_sign_in,
+            notes_list,
+            note_read,
+            note_save,
+            notes_open,
             plugins::plugins_list,
             plugins::plugin_set_enabled,
             plugins::plugin_install,

@@ -2072,3 +2072,45 @@ async fn the_changes_overview_follows_work_from_review_to_landed() {
     assert_eq!(worker.state, "landed");
     assert_eq!(worker.files[0].path, "feature.txt");
 }
+
+#[tokio::test]
+async fn notes_are_refused_while_off_and_every_write_is_shown() {
+    let mut f = fixture().await;
+    let refused = f
+        .harness
+        .write_note("topics/x.md", "x", harness_core::notes::WriteMode::Replace)
+        .await;
+    assert!(
+        refused.is_err(),
+        "notes are off until the person turns them on"
+    );
+
+    let vault = tempfile::tempdir().unwrap();
+    f.harness
+        .set_notes(Some(harness_core::notes::Notes::new(vault.path())))
+        .await;
+    assert!(
+        vault.path().join("me.md").is_file(),
+        "turning notes on sets the folder up"
+    );
+
+    f.harness
+        .write_note(
+            "topics/tauri.md",
+            "# Tauri\nDrag regions need data-tauri-drag-region.",
+            harness_core::notes::WriteMode::Replace,
+        )
+        .await
+        .unwrap();
+    let events = drain(&mut f.events);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        HarnessEvent::NoteWritten { path, created: true } if path == "topics/tauri.md"
+    )));
+    // The person's own note stays theirs.
+    assert!(f
+        .harness
+        .write_note("me.md", "x", harness_core::notes::WriteMode::Replace)
+        .await
+        .is_err());
+}

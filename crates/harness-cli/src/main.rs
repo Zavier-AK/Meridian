@@ -56,6 +56,10 @@ struct Cli {
     #[arg(long, global = true)]
     extensions: Option<PathBuf>,
 
+    /// A notes folder to give the head agent: what it learns, kept between projects.
+    #[arg(long, global = true)]
+    notes: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -298,28 +302,57 @@ fn render(event: &HarnessEvent, streaming: &mut bool) {
                     if s.input.depends_on.is_empty() {
                         format!("{}={state}", s.input.id)
                     } else {
-                        format!("{}(after {})={state}", s.input.id, s.input.depends_on.join(","))
+                        format!(
+                            "{}(after {})={state}",
+                            s.input.id,
+                            s.input.depends_on.join(",")
+                        )
                     }
                 })
                 .collect();
-            println!("  ▦ plan \"{}\" [{:?}]: {}", plan.title, plan.status, lanes.join(" "));
+            println!(
+                "  ▦ plan \"{}\" [{:?}]: {}",
+                plan.title,
+                plan.status,
+                lanes.join(" ")
+            );
         }
         HarnessEvent::PlanFinished { title, outcome, .. } => {
             end_stream(streaming);
             println!("  ▦ plan \"{title}\" finished — {outcome}");
         }
-        HarnessEvent::DelegationRequested { worker_id, role, task } => {
+        HarnessEvent::DelegationRequested {
+            worker_id,
+            role,
+            task,
+        } => {
             end_stream(streaming);
-            println!("  ? {worker_id} [{role}] awaits approval: {}", task.lines().next().unwrap_or_default());
+            println!(
+                "  ? {worker_id} [{role}] awaits approval: {}",
+                task.lines().next().unwrap_or_default()
+            );
         }
         HarnessEvent::DelegationDeclined { worker_id, reason } => {
             end_stream(streaming);
             println!("  ⊘ {worker_id} declined: {reason}");
         }
-        HarnessEvent::MergeLanded { worker_id, branch, commit, automatic, .. } => {
+        HarnessEvent::MergeLanded {
+            worker_id,
+            branch,
+            commit,
+            automatic,
+            ..
+        } => {
             end_stream(streaming);
-            let how = if *automatic { "landed automatically" } else { "merged" };
-            println!("  ⇲ {worker_id} {how}: {branch} at {}", &commit[..commit.len().min(10)]);
+            let how = if *automatic {
+                "landed automatically"
+            } else {
+                "merged"
+            };
+            println!(
+                "  ⇲ {worker_id} {how}: {branch} at {}",
+                &commit[..commit.len().min(10)]
+            );
         }
         HarnessEvent::MergeNotLanded { worker_id, reason } => {
             end_stream(streaming);
@@ -327,7 +360,10 @@ fn render(event: &HarnessEvent, streaming: &mut bool) {
         }
         HarnessEvent::VerificationCheck { worker_id, check } => {
             end_stream(streaming);
-            println!("  ✔︎ check on {worker_id}: {} — {:?}: {}", check.name, check.status, check.summary);
+            println!(
+                "  ✔︎ check on {worker_id}: {} — {:?}: {}",
+                check.name, check.status, check.summary
+            );
         }
         HarnessEvent::VerificationFinished { worker_id, report } => {
             end_stream(streaming);
@@ -386,7 +422,11 @@ fn render(event: &HarnessEvent, streaming: &mut bool) {
             } else if report.status != NightStatus::Running {
                 println!(
                     "  ☾ night shift {}: {} — {}",
-                    if report.status == NightStatus::Stopped { "stopped" } else { "finished" },
+                    if report.status == NightStatus::Stopped {
+                        "stopped"
+                    } else {
+                        "finished"
+                    },
                     report.ended_because.as_deref().unwrap_or("done"),
                     report.headline()
                 );
@@ -402,7 +442,10 @@ fn render(event: &HarnessEvent, streaming: &mut bool) {
             } else if let Some(base) = report.baseline {
                 println!("  ☾ starting score {base}");
             } else {
-                println!("  ☾ night shift on {}: {}", report.branch, report.config.goal);
+                println!(
+                    "  ☾ night shift on {}: {}",
+                    report.branch, report.config.goal
+                );
             }
         }
         _ => {}
@@ -488,11 +531,22 @@ async fn build_harness(cli: &Cli, events: harness_core::agents::EventSink) -> Re
         tracing::warn!("could not update .git/info/exclude: {error:#}");
     }
 
-    let harness = Arc::new(Harness::new(registry, workspaces, store, session_id, events));
+    let harness = Arc::new(Harness::new(
+        registry, workspaces, store, session_id, events,
+    ));
     harness.set_autonomy(cli.autonomy).await;
+    if let Some(dir) = &cli.notes {
+        harness
+            .set_notes(Some(harness_core::notes::Notes::new(dir)))
+            .await;
+    }
 
     // Skills and MCP servers are an addition, never a reason not to run.
-    if let Some(dir) = cli.extensions.clone().or_else(harness_core::extensions::default_dir) {
+    if let Some(dir) = cli
+        .extensions
+        .clone()
+        .or_else(harness_core::extensions::default_dir)
+    {
         // Plugins the person turned on in the app reach the CLI's agents too.
         let enabled = harness_core::plugins::Plugins::new(&dir).enabled(Some(&project));
         match harness_core::extensions::Extensions::new(dir).worker_extras_with(&enabled) {
@@ -708,22 +762,32 @@ async fn voice(
     use harness_core::voice::{self, eval as ev, laya};
 
     let client = if use_laya {
-        let config = laya::LayaConfig::new(sidecar.unwrap_or_else(laya::LayaConfig::bundled_script));
+        let config =
+            laya::LayaConfig::new(sidecar.unwrap_or_else(laya::LayaConfig::bundled_script));
         let client = laya::LayaClient::new(config);
         let mut progress = client.subscribe();
         let watcher = tokio::spawn(async move {
             while progress.changed().await.is_ok() {
-                if let laya::LayaState::Loading { file: Some(file), received, total: Some(total) } =
-                    progress.borrow().clone()
+                if let laya::LayaState::Loading {
+                    file: Some(file),
+                    received,
+                    total: Some(total),
+                } = progress.borrow().clone()
                 {
-                    eprint!("\r  loading Laya: {file} {:.0}%   ", received as f64 / total.max(1) as f64 * 100.0);
+                    eprint!(
+                        "\r  loading Laya: {file} {:.0}%   ",
+                        received as f64 / total.max(1) as f64 * 100.0
+                    );
                 }
             }
         });
         let started = std::time::Instant::now();
         client.load().await.context("loading Laya")?;
         watcher.abort();
-        eprintln!("\r  Laya ready in {:.1}s                          ", started.elapsed().as_secs_f64());
+        eprintln!(
+            "\r  Laya ready in {:.1}s                          ",
+            started.elapsed().as_secs_f64()
+        );
         Some(client)
     } else {
         None
@@ -733,7 +797,10 @@ async fn voice(
         let report = ev::run(client.as_ref(), threshold).await;
         println!("{} phrases\n", report.phrases);
         let line = |name: &str, t: &ev::Tally| {
-            println!("{name:<28} right {:>3}   wrong {:>3}   unsure {:>3}", t.right, t.wrong, t.unsure)
+            println!(
+                "{name:<28} right {:>3}   wrong {:>3}   unsure {:>3}",
+                t.right, t.wrong, t.unsure
+            )
         };
         line("matcher", &report.matcher);
         if client.is_some() {
@@ -748,23 +815,38 @@ async fn voice(
             }
             match report.suggested_threshold {
                 Some(t) => println!("never wrong on this set from a threshold of {t:.2}"),
-                None => println!("wrong at every threshold tried; keep the matcher and the head agent"),
+                None => {
+                    println!("wrong at every threshold tried; keep the matcher and the head agent")
+                }
             }
         }
         println!();
         line(&format!("all together at {threshold:.2}"), &report.combined);
-        let misses: Vec<&ev::Row> = report.rows.iter().filter(|r| r.verdict != ev::Verdict::Right).collect();
+        let misses: Vec<&ev::Row> = report
+            .rows
+            .iter()
+            .filter(|r| r.verdict != ev::Verdict::Right)
+            .collect();
         if !misses.is_empty() {
             println!("\nnot right:");
             for row in misses {
                 let laya = row
                     .laya
                     .as_ref()
-                    .map(|(got, c)| format!("  (Laya: {got}{})", c.map(|c| format!(" {c:.2}")).unwrap_or_default()))
+                    .map(|(got, c)| {
+                        format!(
+                            "  (Laya: {got}{})",
+                            c.map(|c| format!(" {c:.2}")).unwrap_or_default()
+                        )
+                    })
                     .unwrap_or_default();
                 println!(
                     "  {:<6} {:?} → {} (expected {}){laya}",
-                    if row.verdict == ev::Verdict::Wrong { "WRONG" } else { "unsure" },
+                    if row.verdict == ev::Verdict::Wrong {
+                        "WRONG"
+                    } else {
+                        "unsure"
+                    },
                     row.said,
                     row.combined,
                     row.expect
@@ -774,10 +856,12 @@ async fn voice(
         return Ok(());
     }
 
-    let words = words.context("say something: `harness-cli voice \"what's waiting for me\"`, or --eval")?;
+    let words =
+        words.context("say something: `harness-cli voice \"what's waiting for me\"`, or --eval")?;
     let snapshot = ev::fixture();
     // Several commands in one breath are read one by one, as the app does.
-    let parts = voice::everyday::split_commands(words, &snapshot).unwrap_or_else(|| vec![words.to_string()]);
+    let parts = voice::everyday::split_commands(words, &snapshot)
+        .unwrap_or_else(|| vec![words.to_string()]);
     for part in parts {
         let heard = voice::interpret(&part, &snapshot, client.as_ref(), threshold, None).await;
         println!("{}", serde_json::to_string_pretty(&heard)?);
@@ -993,9 +1077,14 @@ async fn main() -> Result<()> {
             println!("MCP server: {}", orchestrator.mcp_url());
 
             let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
-            let renderer = spawn_renderer(worker_events, Arc::downgrade(&harness), None, cli.run_plans);
-            let orchestrator_renderer =
-                spawn_renderer(orchestrator_events, Arc::downgrade(&harness), Some(done_tx), cli.run_plans);
+            let renderer =
+                spawn_renderer(worker_events, Arc::downgrade(&harness), None, cli.run_plans);
+            let orchestrator_renderer = spawn_renderer(
+                orchestrator_events,
+                Arc::downgrade(&harness),
+                Some(done_tx),
+                cli.run_plans,
+            );
 
             let mut orchestrator = orchestrator;
             for (index, turn) in turns.iter().enumerate() {
@@ -1022,7 +1111,11 @@ async fn main() -> Result<()> {
             // Exiting now would cut both off and leave the verdict unprinted.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
             while std::time::Instant::now() < deadline {
-                let working = harness.workers().await.iter().any(|w| !w.status.is_terminal())
+                let working = harness
+                    .workers()
+                    .await
+                    .iter()
+                    .any(|w| !w.status.is_terminal())
                     || harness.plans_running().await;
                 if !working && harness.verifications_running().await == 0 {
                     break;
@@ -1067,7 +1160,11 @@ async fn main() -> Result<()> {
                 .start_night(NightConfig {
                     goal: goal.clone(),
                     metric: metric.clone(),
-                    direction: if *lower { Direction::Lower } else { Direction::Higher },
+                    direction: if *lower {
+                        Direction::Lower
+                    } else {
+                        Direction::Higher
+                    },
                     guard: guard.clone(),
                     role: role.clone(),
                     max_experiments: *experiments,
@@ -1097,7 +1194,10 @@ async fn main() -> Result<()> {
                 }
             }
 
-            let report = harness.night_report().await.context("the night shift vanished")?;
+            let report = harness
+                .night_report()
+                .await
+                .context("the night shift vanished")?;
             if report.kept() > 0 {
                 println!("\nkept work is on {}", report.branch);
                 if *propose {

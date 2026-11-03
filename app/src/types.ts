@@ -52,6 +52,7 @@ export type HarnessEvent =
   | { type: "error"; run_id: string; message: string }
   | { type: "sign_in_problem"; run_id: string; message: string }
   | { type: "prompt_size"; run_id: string; tokens: number }
+  | { type: "note_written"; path: string; created: boolean }
   | { type: "turn_interrupted"; run_id: string }
   | { type: "permission_request"; run_id: string; request_id: string; tool: string; description: string; input: unknown; rules: string[] }
   | { type: "permission_resolved"; run_id: string; request_id: string; allowed: boolean }
@@ -333,6 +334,8 @@ export type ChatItem =
   | { kind: "assistant"; text: string }
   | { kind: "tool"; name: string; toolUseId?: string; workerId?: string }
   | { kind: "notice"; text: string; tone: "info" | "warn" | "error" }
+  /** An agent saved something to the notes. */
+  | { kind: "note"; path: string; created: boolean }
   /** What a plugin command printed. */
   | { kind: "output"; title: string; ok: boolean; text: string }
   /** A merge that landed, with the way back. */
@@ -449,7 +452,11 @@ export type AppSettings = {
   voice: VoiceSettings;
   /** OpenRouter models offered in the fleet editor, e.g. `qwen/qwen3-coder`. */
   openrouter_models: string[];
+  notes: { enabled: boolean; folder: string | null };
 };
+
+export type NoteInfo = { path: string; title: string; modified: number; bytes: number };
+export type NotesListing = { folder: string; notes: NoteInfo[] };
 
 export type OpenRouterStatus = {
   source: "saved" | "environment" | null;

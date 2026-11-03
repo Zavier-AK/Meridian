@@ -1,7 +1,7 @@
 import type { ProjectView } from "./types";
 import { BranchIcon } from "./GitHubView";
 
-export type AppView = "session" | "github" | "tools" | "settings";
+export type AppView = "session" | "github" | "notes" | "tools" | "settings";
 
 type Props = {
   projects: ProjectView[];
@@ -131,6 +131,28 @@ export default function ProjectRail({
           </span>
           <span className="rail-label">
             <span className="rail-name">GitHub</span>
+          </span>
+        </button>
+        <button
+          className={`rail-item ${view === "notes" ? "active" : ""}`}
+          onClick={place("notes")}
+          aria-pressed={view === "notes"}
+          title="Notes: what agents have learned, kept between projects"
+        >
+          <span className="rail-icon">
+            {/* An open book. */}
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+              <path
+                d="M8 4.2C6.6 3.2 4.6 2.9 2.5 3.2v8.9c2.1-.3 4.1 0 5.5 1 1.4-1 3.4-1.3 5.5-1V3.2c-2.1-.3-4.1 0-5.5 1zM8 4.2v8.9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <span className="rail-label">
+            <span className="rail-name">Notes</span>
           </span>
         </button>
         <button
