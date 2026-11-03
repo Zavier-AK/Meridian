@@ -18,6 +18,7 @@ import ToolsView from "./ToolsView";
 import AutonomyDial, { nextStop } from "./AutonomyDial";
 import PlanBoard from "./PlanBoard";
 import NotesView from "./NotesView";
+import { MeridianMark } from "./Brand";
 import PluginPanel, { type PanelContext } from "./PluginPanel";
 import PluginCommands from "./PluginCommands";
 import NightView from "./NightView";
@@ -952,6 +953,7 @@ export default function App() {
           buttons in it stay buttons. */}
       <header className="titlebar" data-tauri-drag-region>
         <span className="title" data-tauri-drag-region>
+          <MeridianMark size={18} />
           Meridian
         </span>
         <span className="titlebar-project" data-tauri-drag-region title={session.project_root}>
@@ -1353,16 +1355,26 @@ function reduceChat(
         item.kind === "landed" && item.workerId === event.worker_id ? { ...item, undone: true } : item,
       );
 
-    case "plan_updated":
-      if (event.plan.status !== "draft") return prev;
+    case "plan_updated": {
+      // One line per plan, when it first appears: waiting for the person (the dial is on
+      // Ask), or already running. Later updates are the Plan tab's business.
+      const plan = event.plan;
+      if (plan.status !== "draft" && plan.status !== "running") return prev;
+      if (prev.some((item) => item.kind === "notice" && item.planId === plan.id)) return prev;
+      const steps = `${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}`;
       return [
         ...prev,
         {
           kind: "notice",
           tone: "info",
-          text: `Proposed a plan — "${event.plan.title}", ${event.plan.steps.length} step(s). Review it on the Plan tab.`,
+          planId: plan.id,
+          text:
+            plan.status === "draft"
+              ? `Proposed a plan — "${plan.title}", ${steps}. Run it from the Plan tab.`
+              : `Started a plan — "${plan.title}", ${steps}. Follow it on the Plan tab.`,
         },
       ];
+    }
 
     case "note_written":
       return [...prev, { kind: "note", path: event.path, created: event.created }];

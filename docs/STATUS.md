@@ -77,6 +77,14 @@ output can merge anything.
 
 ### Working and verified
 
+- **Plans start by themselves** unless the dial is on Ask. Tested in the engine: under
+  Review a proposed plan runs without anyone pressing Run, and under Ask it waits and
+  nothing starts. The head agent is told to give a review or investigation to one
+  reviewer rather than plan it.
+- **Three-colour themes** (base, accent, second accent) with six presets. Rendered
+  headlessly in Sakura, Ember, Volt and Tide. The settings are validated as `#rrggbb`
+  before they reach CSS.
+
 - **Notes between projects.**
   - Tested in the engine: the folder layout, what the head agent is given (capped, empty
     notes skipped), search ranking, recall thresholds and once-per-session, agents kept

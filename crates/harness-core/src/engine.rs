@@ -1293,6 +1293,26 @@ impl Harness {
         self.plans.read().await.values().cloned().collect()
     }
 
+    /// What the head agent's `propose_plan` does: under `Ask` the plan waits on the
+    /// board for the person; at any other level it starts at once, and the board is
+    /// where they follow it and can stop it. Running freely is what those levels already
+    /// mean for a single delegation, and a plan is only several of them.
+    pub async fn propose_or_run_plan(
+        self: &Arc<Self>,
+        title: &str,
+        summary: &str,
+        steps: Vec<crate::plan::StepInput>,
+    ) -> Result<crate::plan::Plan> {
+        let start = !self.autonomy().await.delegation_needs_approval();
+        let plan = self.add_plan(title, summary, steps, start).await?;
+        if start {
+            let harness = Arc::clone(self);
+            let plan_id = plan.id.clone();
+            tokio::spawn(async move { harness.drive_plan(plan_id).await });
+        }
+        Ok(plan)
+    }
+
     /// Put a plan in front of the person. It replaces any plan still being reviewed —
     /// a revision, usually — and runs nothing.
     pub async fn propose_plan(
@@ -1301,14 +1321,28 @@ impl Harness {
         summary: &str,
         steps: Vec<crate::plan::StepInput>,
     ) -> Result<crate::plan::Plan> {
+        self.add_plan(title, summary, steps, false).await
+    }
+
+    /// A new plan, as a draft or already running (the caller then drives it).
+    async fn add_plan(
+        &self,
+        title: &str,
+        summary: &str,
+        steps: Vec<crate::plan::StepInput>,
+        running: bool,
+    ) -> Result<crate::plan::Plan> {
         use crate::plan::{Plan, PlanStatus};
         crate::plan::validate(&steps, &*self.registry.read().await)?;
-        let plan = Plan::new(
+        let mut plan = Plan::new(
             format!("p-{}", Uuid::new_v4().simple()),
             title.trim().to_string(),
             summary.trim().to_string(),
             steps,
         );
+        if running {
+            plan.status = PlanStatus::Running;
+        }
         let replaced: Vec<Plan> = {
             let mut plans = self.plans.write().await;
             let drafts: Vec<String> = plans

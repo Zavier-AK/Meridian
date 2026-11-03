@@ -342,15 +342,15 @@ impl HarnessTools {
 
     #[tool(
         name = "propose_plan",
-        description = "Show the person a plan for work with more than one step, instead of \
-                       delegating the steps yourself. Each step is one worker's job: an id, a \
-                       short title, a role, a self-contained task, and the ids of steps that \
-                       must land before it (depends_on). Set depends_on whenever a step needs \
-                       another's changes: steps without it run at the same time, each on its \
-                       own copy of the code. The person edits, comments on, or \
-                       runs it on a board; returns at once. When they run it, the harness \
-                       starts the steps itself and tells you how it ends. Proposing again \
-                       replaces a plan still under review."
+        description = "Run work with more than one step as a plan, instead of delegating the \
+                       steps yourself. Each step is one worker's job: an id, a short title, a \
+                       role, a self-contained task, and the ids of steps that must land before \
+                       it (depends_on). Set depends_on whenever a step needs another's \
+                       changes: steps without it run at the same time, each on its own copy \
+                       of the code. Returns at once. The harness starts the steps itself, \
+                       shows them on a board, and tells you how the plan ends; only when the \
+                       person has set the dial to Ask does it wait for them to run it first. \
+                       Proposing again replaces a plan still waiting."
     )]
     async fn propose_plan(
         &self,
@@ -358,15 +358,25 @@ impl HarnessTools {
     ) -> Json<serde_json::Value> {
         match self
             .harness
-            .propose_plan(&params.title, &params.summary, params.steps)
+            .propose_or_run_plan(&params.title, &params.summary, params.steps)
             .await
         {
+            Ok(plan) if plan.status == crate::plan::PlanStatus::Running => {
+                Json(serde_json::json!({
+                    "plan_id": plan.id,
+                    "status": "running",
+                    "note": "The harness is running its steps; the person can follow or stop \
+                             it on the board. Do not delegate its steps yourself. End your \
+                             turn; you will be told how it ends."
+                }))
+            }
             Ok(plan) => Json(serde_json::json!({
                 "plan_id": plan.id,
-                "status": "shown to the person",
-                "note": "It runs only when they choose to run it, possibly after editing it. \
-                         Do not delegate its steps yourself. End your turn; you will be told \
-                         if they comment, and how it ends if they run it."
+                "status": "waiting for the person",
+                "note": "They have the dial on Ask, so it runs only when they choose to run \
+                         it, possibly after editing it. Do not delegate its steps yourself. \
+                         End your turn; you will be told if they comment, and how it ends if \
+                         they run it."
             })),
             Err(err) => Json(serde_json::json!({ "error": format!("{err:#}") })),
         }

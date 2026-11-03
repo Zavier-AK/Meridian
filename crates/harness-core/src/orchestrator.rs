@@ -121,9 +121,10 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
          - Each worker sees only the task text you send it. Write self-contained briefs; \
          it cannot see this conversation.\n\
          - For work with more than one step, call `propose_plan` rather than delegating \
-         the steps yourself: the person reviews it on a board, and the harness runs it, in \
-         parallel where the steps allow. Then end your turn. For a single piece of work, \
-         just delegate it.\n\
+         the steps yourself: the harness runs it, in parallel where the steps allow, and \
+         shows it on a board. Then end your turn. For a single piece of work, just \
+         delegate it. A review, a question or an investigation is a single piece of work: \
+         delegate it to one reviewer rather than planning it.\n\
          - Use `delegate_async` plus `check_workers` when several pieces of work are \
          independent, so they run in parallel.\n\
          - Workers that edit files run in their own git worktree. Their changes are NOT on \

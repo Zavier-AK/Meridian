@@ -28,8 +28,16 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
     ("max_turns", "the head agent's turn limit, a number"),
     ("notifications", "on or off"),
     (
+        "base",
+        "the background colour: #rrggbb, black, white, or another colour name, or default",
+    ),
+    (
         "accent",
         "a colour: #rrggbb, pink, blue, green, orange, purple, red, teal, yellow, or default",
+    ),
+    (
+        "accent_2",
+        "the second accent, a colour like accent, or default",
     ),
     (
         "font",
@@ -111,6 +119,8 @@ fn accent(value: &str) -> Result<Option<String>, String> {
         "red" => "#ff8a94",
         "teal" => "#6fd6cf",
         "yellow" => "#f3d67c",
+        "black" => "#0c0c0e",
+        "white" => "#f4f1ec",
         hex if hex.len() == 7
             && hex.starts_with('#')
             && hex[1..].chars().all(|c| c.is_ascii_hexdigit()) =>
@@ -135,7 +145,9 @@ pub fn apply_setting(s: &mut settings::Settings, key: &str, value: &str) -> Resu
         }
         "max_turns" => s.max_turns = number(value)?,
         "notifications" => s.notifications = flag(value)?,
+        "base" => s.base = accent(value)?,
         "accent" => s.accent = accent(value)?,
+        "accent_2" | "second_accent" => s.accent_2 = accent(value)?,
         "font" => s.font = font(value)?,
         "voice.enabled" => v.enabled = flag(value)?,
         "voice.hotkey" => v.hotkey = text,
@@ -198,7 +210,9 @@ fn setting_value(s: &settings::Settings, key: &str) -> String {
         "default_model" => s.default_model.clone().unwrap_or_else(|| "default".into()),
         "max_turns" => s.max_turns.to_string(),
         "notifications" => on(s.notifications),
+        "base" => s.base.clone().unwrap_or_else(|| "default".into()),
         "accent" => s.accent.clone().unwrap_or_else(|| "default".into()),
+        "accent_2" => s.accent_2.clone().unwrap_or_else(|| "default".into()),
         "font" => s.font.clone(),
         "voice.enabled" => on(v.enabled),
         "voice.hotkey" => v.hotkey.clone(),

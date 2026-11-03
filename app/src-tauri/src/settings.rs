@@ -25,8 +25,13 @@ pub struct Settings {
     pub max_turns: u32,
     /// Notify when a worker finishes or a merge waits, while the window is in the back.
     pub notifications: bool,
-    /// Accent colour as `#rrggbb`. `None` keeps the theme's own.
+    /// The theme's three colours, each `#rrggbb`; `None` keeps the theme's own. The
+    /// base is the background everything is tinted from, the accent is buttons,
+    /// selection and links, and the second accent is pull requests, the background glow
+    /// and the gradients.
+    pub base: Option<String>,
     pub accent: Option<String>,
+    pub accent_2: Option<String>,
     /// The type pairing, one of [`FONTS`].
     pub font: String,
     /// Push-to-talk.
@@ -74,7 +79,9 @@ impl Default for Settings {
             default_model: None,
             max_turns: 200,
             notifications: true,
+            base: None,
             accent: None,
+            accent_2: None,
             font: FONTS[0].to_string(),
             voice: crate::voice::VoiceSettings::default(),
             openrouter_models: Vec::new(),
@@ -105,13 +112,19 @@ impl Settings {
         if !(1..=1000).contains(&self.max_turns) {
             return Err("max turns must be between 1 and 1000".into());
         }
-        self.accent = self.accent.filter(|accent| !accent.is_empty());
-        if let Some(accent) = &self.accent {
-            let valid = accent.len() == 7
-                && accent.starts_with('#')
-                && accent[1..].chars().all(|c| c.is_ascii_hexdigit());
-            if !valid {
-                return Err(format!("`{accent}` is not a #rrggbb colour"));
+        for colour in [&mut self.base, &mut self.accent, &mut self.accent_2] {
+            *colour = colour
+                .take()
+                .map(|c| c.trim().to_lowercase())
+                .filter(|c| !c.is_empty());
+            if let Some(c) = colour {
+                // Interpolated into CSS, so nothing but the six hex digits gets through.
+                let valid = c.len() == 7
+                    && c.starts_with('#')
+                    && c[1..].chars().all(|c| c.is_ascii_hexdigit());
+                if !valid {
+                    return Err(format!("`{c}` is not a #rrggbb colour"));
+                }
             }
         }
         self.font = self.font.trim().to_lowercase();
@@ -263,7 +276,9 @@ mod tests {
             default_model: Some("opus".into()),
             max_turns: 80,
             notifications: false,
+            base: Some("#0c0c0e".into()),
             accent: Some("#e0567a".into()),
+            accent_2: Some("#ffc43d".into()),
             font: "plex".into(),
             voice: crate::voice::VoiceSettings {
                 enabled: true,
@@ -319,6 +334,14 @@ mod tests {
             },
             Settings {
                 openrouter_models: vec!["no-vendor".into()],
+                ..Default::default()
+            },
+            Settings {
+                base: Some("#12345".into()),
+                ..Default::default()
+            },
+            Settings {
+                accent_2: Some("#1234567); x".into()),
                 ..Default::default()
             },
             Settings {

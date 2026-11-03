@@ -1547,6 +1547,37 @@ async fn a_proposed_plan_runs_nothing_until_the_person_runs_it() {
 }
 
 #[tokio::test]
+async fn the_head_agents_plan_starts_by_itself_unless_the_dial_is_on_ask() {
+    let f = fixture().await;
+
+    // Review, the default: it runs without anyone pressing Run.
+    let plan = f
+        .harness
+        .propose_or_run_plan("Review it", "", vec![plan_step("a", "WRITE:a.md:a", &[])])
+        .await
+        .unwrap();
+    assert_eq!(plan.status, PlanStatus::Running);
+    plan_until(&f, &plan.id, |p| p.steps[0].state == StepState::Review).await;
+
+    // Ask: it waits on the board, and nothing starts.
+    f.harness
+        .set_autonomy(harness_core::autonomy::Autonomy::Ask)
+        .await;
+    let held = f
+        .harness
+        .propose_or_run_plan("Held", "", vec![plan_step("b", "WRITE:b.md:b", &[])])
+        .await
+        .unwrap();
+    assert_eq!(held.status, PlanStatus::Draft);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(
+        f.harness.workers().await.len(),
+        1,
+        "only the first plan's step ran"
+    );
+}
+
+#[tokio::test]
 async fn a_dependent_step_waits_until_the_one_before_it_has_landed() {
     let f = fixture().await;
     let plan = f

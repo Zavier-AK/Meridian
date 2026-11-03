@@ -138,7 +138,9 @@ export default function NotesView({ initialPath, onClose }: Props) {
               ))}
             </div>
           ))}
-          {listing && groups.length === 0 && <p className="muted">No notes yet.</p>}
+          {listing && groups.length === 0 && (
+            <p className="muted notes-empty">No notes yet. They appear as agents learn things worth keeping.</p>
+          )}
         </nav>
 
         <article className="notes-page">
