@@ -1,6 +1,6 @@
 # Meridian (local-harness) — project status
 
-_Last updated: 30 September 2026_
+_Last updated: 3 November 2026_
 
 ## What this is
 
@@ -76,6 +76,18 @@ output can merge anything.
 ## Where it stands
 
 ### Working and verified
+
+- **Notes between projects.**
+  - Tested in the engine: the folder layout, what the head agent is given (capped, empty
+    notes skipped), search ranking, recall thresholds and once-per-session, agents kept
+    to `projects/` and `topics/`, path tricks refused, writes refused while notes are off,
+    and every write recorded as an event.
+  - Run with the real CLI (sonnet), against a notes folder holding a convention (helpers
+    throw `TypeError` on bad input). Without recall, the head agent didn't look and the
+    change broke the convention. With recall, it read the note, and the worker's change
+    followed it.
+  - In that run the head agent didn't write a project note; nothing new was decided.
+    Whether it writes often enough, or too often, needs real use to judge.
 
 - **Plugins.**
   - Tested in the engine: discovery, approval by digest (a changed file turns a plugin

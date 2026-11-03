@@ -214,6 +214,8 @@ pub struct Orchestrator {
     harness: Arc<Harness>,
     project_root: std::path::PathBuf,
     resumed_backend_session: bool,
+    /// Notes already pointed out to this head agent, so none is repeated.
+    recalled: std::collections::HashSet<String>,
 }
 
 impl Orchestrator {
@@ -271,7 +273,10 @@ impl Orchestrator {
         }
 
         // Probe before briefing, so the head agent never plans around a dead backend.
-        let brief = orchestrator_brief_with(&harness.list_roles_probed().await, &native);
+        let mut brief = orchestrator_brief_with(&harness.list_roles_probed().await, &native);
+        if let Some(notes) = harness.notes().await {
+            brief.push_str(&notes.head_context(project_root));
+        }
 
         let run_id = format!("orchestrator-{}", harness.session_id());
         harness
@@ -297,6 +302,7 @@ impl Orchestrator {
                 harness,
                 project_root: project_root.to_path_buf(),
                 resumed_backend_session: resume_session_id.is_some(),
+                recalled: Default::default(),
             },
             events,
         ))
@@ -322,7 +328,18 @@ impl Orchestrator {
                 text: text.to_string(),
             })
             .await;
-        self.session.send(text).await
+        // Notes that clearly bear on the message ride along as a few lines, found here
+        // rather than by the model, so a convention isn't missed because the task looked
+        // too small to look anything up. Each note is pointed out once per session.
+        let mut message = text.to_string();
+        if let Some(notes) = self.harness.notes().await {
+            let hits = notes.recall(text, &self.project_root, &self.recalled);
+            if !hits.is_empty() {
+                message.push_str(&crate::notes::Notes::recall_block(&hits));
+                self.recalled.extend(hits.into_iter().map(|h| h.path));
+            }
+        }
+        self.session.send(&message).await
     }
 
     /// Stop the head agent's current turn. The conversation and the process survive,
@@ -450,10 +467,11 @@ mod tests {
 
     #[test]
     fn tool_surface_stays_small_to_keep_the_context_floor_down() {
-        // Three read tools plus seven harness tools (the six delegation tools and
-        // `propose_plan`). If this grows, the per-session floor grows with it, so the
-        // assertion is a tripwire rather than trivia.
-        assert_eq!(orchestrator_role(None, None).effective_tools().len(), 10);
+        // Three read tools plus ten harness tools (the six delegation tools,
+        // `propose_plan`, and search/read/write for notes). If this grows, the
+        // per-session floor grows with it, so the assertion is a tripwire rather than
+        // trivia.
+        assert_eq!(orchestrator_role(None, None).effective_tools().len(), 13);
     }
 
     #[test]

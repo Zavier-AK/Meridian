@@ -23,6 +23,7 @@ pub mod isolation;
 pub mod mcp;
 pub mod native;
 pub mod night;
+pub mod notes;
 pub mod openrouter;
 pub mod orchestrator;
 pub mod permissions;

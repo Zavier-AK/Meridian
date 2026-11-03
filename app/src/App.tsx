@@ -17,6 +17,7 @@ import PreviewPanel from "./PreviewPanel";
 import ToolsView from "./ToolsView";
 import AutonomyDial, { nextStop } from "./AutonomyDial";
 import PlanBoard from "./PlanBoard";
+import NotesView from "./NotesView";
 import PluginPanel, { type PanelContext } from "./PluginPanel";
 import PluginCommands from "./PluginCommands";
 import NightView from "./NightView";
@@ -116,6 +117,8 @@ export default function App() {
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [pluginsKey, setPluginsKey] = useState(0);
   const [pluginTab, setPluginTab] = useState<string | null>(null);
+  // Which note the Notes view opens on.
+  const [notePath, setNotePath] = useState<string | null>(null);
   const [autonomy, setAutonomy] = useState<Autonomy>("review");
   /** Per project: which MCP servers its head agent's CLI managed to connect. */
   const [mcpStatus, setMcpStatus] = useState<Record<string, McpStatus>>({});
@@ -994,6 +997,7 @@ export default function App() {
           view={view}
           onView={(next) => {
             if (next === "github") setGithubRepo("");
+            if (next === "notes") setNotePath(null);
             setView(next);
           }}
           expanded={navExpanded}
@@ -1001,6 +1005,9 @@ export default function App() {
           githubDot={repos.some((repo) => repo.ahead > 0)}
         />
         <main className={`main-pane ${switching ? "switching" : ""}`}>
+          {view === "notes" && (
+            <NotesView key={notePath ?? ""} initialPath={notePath} onClose={() => setView("session")} />
+          )}
           {view === "github" && (
             <GitHubView
               key={session.project_root}
@@ -1164,6 +1171,10 @@ export default function App() {
                 onSend={send}
                 onSelectWorker={setSelectedWorker}
                 onUndo={(id) => void undoMerge(id)}
+                onOpenNote={(path) => {
+                  setNotePath(path);
+                  setView("notes");
+                }}
                 onPermission={(id, decision) => void answerPermission(id, decision)}
                 model={headModel}
                 promptTokens={headPrompt}
@@ -1352,6 +1363,9 @@ function reduceChat(
           text: `Proposed a plan — "${event.plan.title}", ${event.plan.steps.length} step(s). Review it on the Plan tab.`,
         },
       ];
+
+    case "note_written":
+      return [...prev, { kind: "note", path: event.path, created: event.created }];
 
     case "night_updated": {
       // Only the ending is chat-worthy; the tab carries the progress.

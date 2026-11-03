@@ -325,6 +325,11 @@ pub enum HarnessEvent {
         run_id: String,
         tokens: u64,
     },
+    /// An agent wrote to the notes folder: what it learned, for the person to see.
+    NoteWritten {
+        path: String,
+        created: bool,
+    },
     /// A Claude run failed because its sign-in did (expired, revoked, refresh refused).
     /// Follows that run's `RunFinished`.
     SignInProblem {
@@ -373,6 +378,7 @@ impl HarnessEvent {
             Self::PlanUpdated { plan } => &plan.id,
             Self::PlanFinished { plan_id, .. } => plan_id,
             Self::NightUpdated { report } => &report.id,
+            Self::NoteWritten { path, .. } => path,
         }
     }
 }

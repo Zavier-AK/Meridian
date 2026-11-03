@@ -33,6 +33,39 @@ pub struct Settings {
     pub voice: crate::voice::VoiceSettings,
     /// OpenRouter models offered when a role is reassigned, e.g. `qwen/qwen3-coder`.
     pub openrouter_models: Vec<String>,
+    /// What agents learn, kept between projects.
+    pub notes: NotesSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotesSettings {
+    pub enabled: bool,
+    /// The folder; `None` is `~/Documents/Meridian Notes`.
+    pub folder: Option<String>,
+}
+
+impl Default for NotesSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            folder: None,
+        }
+    }
+}
+
+impl NotesSettings {
+    /// The notes, when on.
+    pub fn notes(&self) -> Option<harness_core::notes::Notes> {
+        if !self.enabled {
+            return None;
+        }
+        let root = match &self.folder {
+            Some(folder) => PathBuf::from(folder),
+            None => harness_core::notes::Notes::default_root()?,
+        };
+        Some(harness_core::notes::Notes::new(root))
+    }
 }
 
 impl Default for Settings {
@@ -45,6 +78,7 @@ impl Default for Settings {
             font: FONTS[0].to_string(),
             voice: crate::voice::VoiceSettings::default(),
             openrouter_models: Vec::new(),
+            notes: NotesSettings::default(),
         }
     }
 }
@@ -107,6 +141,21 @@ impl Settings {
             ));
         }
         self.openrouter_models = models;
+        self.notes.folder = self
+            .notes
+            .folder
+            .take()
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty())
+            .map(|f| match (f.strip_prefix("~/"), std::env::var("HOME")) {
+                (Some(rest), Ok(home)) => format!("{}/{rest}", home.trim_end_matches('/')),
+                _ => f,
+            });
+        if let Some(folder) = &self.notes.folder {
+            if !Path::new(folder).is_absolute() {
+                return Err(format!("the notes folder `{folder}` must be a full path"));
+            }
+        }
         Ok(self)
     }
 }
@@ -167,9 +216,8 @@ fn save_key_to(path: &Path, key: Option<&str>) -> Result<(), String> {
         };
     };
     let key = key.trim();
-    let plausible = !key.is_empty()
-        && key.len() <= 300
-        && key.chars().all(|c| c.is_ascii_graphic());
+    let plausible =
+        !key.is_empty() && key.len() <= 300 && key.chars().all(|c| c.is_ascii_graphic());
     if !plausible {
         return Err("that doesn't look like an API key".into());
     }
@@ -223,6 +271,10 @@ mod tests {
                 ..Default::default()
             },
             openrouter_models: vec!["qwen/qwen3-coder".into()],
+            notes: NotesSettings {
+                enabled: false,
+                folder: Some("/Users/me/Vault".into()),
+            },
         };
         save_to(&path, &settings).unwrap();
         assert_eq!(load_from(&path), settings);
@@ -269,6 +321,13 @@ mod tests {
                 openrouter_models: vec!["no-vendor".into()],
                 ..Default::default()
             },
+            Settings {
+                notes: NotesSettings {
+                    enabled: true,
+                    folder: Some("relative/notes".into()),
+                },
+                ..Default::default()
+            },
         ];
         for settings in bad {
             assert!(settings.clone().validated().is_err(), "{settings:?}");
@@ -278,6 +337,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(blank.validated().unwrap().default_model, None);
+        let tilde = Settings {
+            notes: NotesSettings {
+                enabled: true,
+                folder: Some("~/Notes".into()),
+            },
+            ..Default::default()
+        };
+        let folder = tilde.validated().unwrap().notes.folder.unwrap();
+        assert!(
+            Path::new(&folder).is_absolute() && folder.ends_with("/Notes"),
+            "{folder}"
+        );
 
         let models = Settings {
             openrouter_models: vec![

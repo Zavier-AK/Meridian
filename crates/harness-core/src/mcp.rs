@@ -158,6 +158,30 @@ fn awaiting_approval(worker_id: String, role: String) -> WorkerSummary {
     }
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NotesSearchParams {
+    /// What you're about to work on, in a few words: "tauri window dragging".
+    pub query: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NotePathParams {
+    /// The note's path in the notes folder, as search gave it: "topics/tauri-gotchas.md".
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NoteWriteParams {
+    /// Under projects/ or topics/, ending in .md.
+    pub path: String,
+    /// Markdown. With mode "replace" (the default), the whole note: read it first and
+    /// keep what still holds. With "append", lines to add at the end.
+    pub content: String,
+    /// "replace" or "append".
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct HarnessTools {
     harness: Arc<Harness>,
@@ -204,18 +228,23 @@ impl HarnessTools {
                        task as a self-contained brief. Prefer this over doing the work \
                        yourself: workers are cheaper and run in isolated workspaces."
     )]
-    async fn delegate(&self, Parameters(params): Parameters<DelegateParams>) -> Json<WorkerSummary> {
+    async fn delegate(
+        &self,
+        Parameters(params): Parameters<DelegateParams>,
+    ) -> Json<WorkerSummary> {
         // Under the `Ask` autonomy level the person approves each delegation. Waiting for
         // them inside this call would time out, so it returns at once instead.
         if self.harness.autonomy().await.delegation_needs_approval() {
-            return Json(match self
-                .harness
-                .queue_for_approval(&params.role, &params.task, params.context_files)
-                .await
-            {
-                Ok(worker_id) => awaiting_approval(worker_id, params.role),
-                Err(err) => failed_summary(params.role, err),
-            });
+            return Json(
+                match self
+                    .harness
+                    .queue_for_approval(&params.role, &params.task, params.context_files)
+                    .await
+                {
+                    Ok(worker_id) => awaiting_approval(worker_id, params.role),
+                    Err(err) => failed_summary(params.role, err),
+                },
+            );
         }
         match self
             .harness
@@ -238,22 +267,28 @@ impl HarnessTools {
         Parameters(params): Parameters<DelegateParams>,
     ) -> Json<serde_json::Value> {
         if self.harness.autonomy().await.delegation_needs_approval() {
-            return Json(match self
-                .harness
-                .queue_for_approval(&params.role, &params.task, params.context_files)
-                .await
-            {
-                Ok(worker_id) => serde_json::to_value(awaiting_approval(worker_id, params.role))
-                    .unwrap_or_default(),
-                Err(err) => serde_json::json!({ "error": format!("{err:#}") }),
-            });
+            return Json(
+                match self
+                    .harness
+                    .queue_for_approval(&params.role, &params.task, params.context_files)
+                    .await
+                {
+                    Ok(worker_id) => {
+                        serde_json::to_value(awaiting_approval(worker_id, params.role))
+                            .unwrap_or_default()
+                    }
+                    Err(err) => serde_json::json!({ "error": format!("{err:#}") }),
+                },
+            );
         }
         match self
             .harness
             .delegate_async(&params.role, &params.task, params.context_files)
             .await
         {
-            Ok(worker_id) => Json(serde_json::json!({ "worker_id": worker_id, "status": "queued" })),
+            Ok(worker_id) => {
+                Json(serde_json::json!({ "worker_id": worker_id, "status": "queued" }))
+            }
             Err(err) => Json(serde_json::json!({ "error": format!("{err:#}") })),
         }
     }
@@ -289,7 +324,10 @@ impl HarnessTools {
         description = "Read a finished worker's result, including what it changed. Returns \
                        the worker's current state if it is still running."
     )]
-    async fn collect(&self, Parameters(params): Parameters<WorkerIdParams>) -> Json<serde_json::Value> {
+    async fn collect(
+        &self,
+        Parameters(params): Parameters<WorkerIdParams>,
+    ) -> Json<serde_json::Value> {
         match self.harness.worker(&params.worker_id).await {
             Some(record) => {
                 let mut summary = WorkerSummary::from(record);
@@ -314,8 +352,15 @@ impl HarnessTools {
                        starts the steps itself and tells you how it ends. Proposing again \
                        replaces a plan still under review."
     )]
-    async fn propose_plan(&self, Parameters(params): Parameters<PlanParams>) -> Json<serde_json::Value> {
-        match self.harness.propose_plan(&params.title, &params.summary, params.steps).await {
+    async fn propose_plan(
+        &self,
+        Parameters(params): Parameters<PlanParams>,
+    ) -> Json<serde_json::Value> {
+        match self
+            .harness
+            .propose_plan(&params.title, &params.summary, params.steps)
+            .await
+        {
             Ok(plan) => Json(serde_json::json!({
                 "plan_id": plan.id,
                 "status": "shown to the person",
@@ -323,6 +368,70 @@ impl HarnessTools {
                          Do not delegate its steps yourself. End your turn; you will be told \
                          if they comment, and how it ends if they run it."
             })),
+            Err(err) => Json(serde_json::json!({ "error": format!("{err:#}") })),
+        }
+    }
+
+    #[tool(
+        name = "notes_search",
+        description = "Search the notes from earlier work, in this project and others: \
+                       decisions, conventions, gotchas. Returns the best few as snippets. \
+                       Read one in full with notes_read only when its snippet is relevant."
+    )]
+    async fn notes_search(
+        &self,
+        Parameters(params): Parameters<NotesSearchParams>,
+    ) -> Json<serde_json::Value> {
+        match self.harness.notes().await {
+            Some(notes) => Json(serde_json::json!({ "results": notes.search(&params.query, 6) })),
+            None => Json(serde_json::json!({ "error": "notes are turned off in Settings" })),
+        }
+    }
+
+    #[tool(
+        name = "notes_read",
+        description = "Read one note in full, by the path search gave."
+    )]
+    async fn notes_read(
+        &self,
+        Parameters(params): Parameters<NotePathParams>,
+    ) -> Json<serde_json::Value> {
+        let Some(notes) = self.harness.notes().await else {
+            return Json(serde_json::json!({ "error": "notes are turned off in Settings" }));
+        };
+        match notes.read(&params.path) {
+            Ok(text) => Json(serde_json::json!({ "path": params.path, "text": text })),
+            Err(err) => Json(serde_json::json!({ "error": format!("{err:#}") })),
+        }
+    }
+
+    #[tool(
+        name = "notes_write",
+        description = "Record something a later session will need: a decision and why, a \
+                       convention, a gotcha. projects/<name>.md for this project, \
+                       topics/<topic>.md for know-how that applies elsewhere. A few lines, \
+                       not a transcript; replace a note with an edited version rather than \
+                       appending duplicates. The person sees every write."
+    )]
+    async fn notes_write(
+        &self,
+        Parameters(params): Parameters<NoteWriteParams>,
+    ) -> Json<serde_json::Value> {
+        let mode = match params.mode.as_deref() {
+            None | Some("replace") => crate::notes::WriteMode::Replace,
+            Some("append") => crate::notes::WriteMode::Append,
+            Some(other) => {
+                return Json(
+                    serde_json::json!({ "error": format!("mode `{other}`: use replace or append") }),
+                )
+            }
+        };
+        match self
+            .harness
+            .write_note(&params.path, &params.content, mode)
+            .await
+        {
+            Ok(written) => Json(serde_json::to_value(written).unwrap_or_default()),
             Err(err) => Json(serde_json::json!({ "error": format!("{err:#}") })),
         }
     }
@@ -385,8 +494,10 @@ impl McpServer {
         &self,
         others: &std::collections::BTreeMap<String, serde_json::Value>,
     ) -> String {
-        let mut servers: serde_json::Map<String, serde_json::Value> =
-            others.iter().map(|(name, config)| (name.clone(), config.clone())).collect();
+        let mut servers: serde_json::Map<String, serde_json::Value> = others
+            .iter()
+            .map(|(name, config)| (name.clone(), config.clone()))
+            .collect();
         servers.insert(
             self.name.to_string(),
             serde_json::json!({
@@ -400,10 +511,21 @@ impl McpServer {
 
     /// Tool names to pass to `--allowedTools` so delegation needs no approval prompt.
     pub fn allowed_tool_names() -> Vec<String> {
-        ["list_roles", "delegate", "delegate_async", "check_workers", "collect", "request_merge", "propose_plan"]
-            .iter()
-            .map(|t| format!("mcp__{SERVER_NAME}__{t}"))
-            .collect()
+        [
+            "list_roles",
+            "delegate",
+            "delegate_async",
+            "check_workers",
+            "collect",
+            "request_merge",
+            "propose_plan",
+            "notes_search",
+            "notes_read",
+            "notes_write",
+        ]
+        .iter()
+        .map(|t| format!("mcp__{SERVER_NAME}__{t}"))
+        .collect()
     }
 
     pub async fn shutdown(self) {
@@ -454,26 +576,28 @@ where
     let expected = format!("Bearer {token}");
     let app = axum::Router::new()
         .route_service("/mcp", service)
-        .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
-            let expected = expected.clone();
-            async move {
-                let presented = req
-                    .headers()
-                    .get(axum::http::header::AUTHORIZATION)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or_default();
+        .layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let expected = expected.clone();
+                async move {
+                    let presented = req
+                        .headers()
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default();
 
-                // Anything that reaches this port can spend the subscription, so an
-                // unauthenticated request is refused rather than merely logged.
-                if presented != expected {
-                    return axum::http::Response::builder()
-                        .status(axum::http::StatusCode::UNAUTHORIZED)
-                        .body(axum::body::Body::from("unauthorized"))
-                        .unwrap();
+                    // Anything that reaches this port can spend the subscription, so an
+                    // unauthenticated request is refused rather than merely logged.
+                    if presented != expected {
+                        return axum::http::Response::builder()
+                            .status(axum::http::StatusCode::UNAUTHORIZED)
+                            .body(axum::body::Body::from("unauthorized"))
+                            .unwrap();
+                    }
+                    next.run(req).await
                 }
-                next.run(req).await
-            }
-        }));
+            },
+        ));
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await

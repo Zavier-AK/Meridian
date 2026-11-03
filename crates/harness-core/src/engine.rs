@@ -68,6 +68,8 @@ pub struct Harness {
     /// Skills and MCP servers from the Tools & Skills tab. Read per delegation, so a
     /// change reaches the next worker without restarting anything.
     extras: RwLock<crate::extensions::WorkerExtras>,
+    /// The notes folder, when the person has notes on.
+    notes: RwLock<Option<crate::notes::Notes>>,
     /// Checks on proposed merges, keyed by worker.
     verifications: RwLock<HashMap<String, VerificationState>>,
     /// Verification runs tests and possibly a local model, both heavy; one at a time.
@@ -155,6 +157,7 @@ impl Harness {
             cancels: RwLock::new(HashMap::new()),
             claude_quota: RwLock::new(None),
             extras: RwLock::new(Default::default()),
+            notes: RwLock::new(None),
             verifications: RwLock::new(HashMap::new()),
             verify_slots: Arc::new(tokio::sync::Semaphore::new(1)),
             autonomy: RwLock::new(Default::default()),
@@ -174,6 +177,41 @@ impl Harness {
     /// Replace the skills and MCP servers workers get from their next delegation on.
     pub async fn set_extras(&self, extras: crate::extensions::WorkerExtras) {
         *self.extras.write().await = extras;
+    }
+
+    /// Turn notes on (with their folder) or off. Takes effect for the head agent when it
+    /// next starts; the tools answer straight away.
+    pub async fn set_notes(&self, notes: Option<crate::notes::Notes>) {
+        if let Some(notes) = &notes {
+            if let Err(error) = notes.ensure() {
+                tracing::warn!("notes folder not ready: {error:#}");
+            }
+        }
+        *self.notes.write().await = notes;
+    }
+
+    pub async fn notes(&self) -> Option<crate::notes::Notes> {
+        self.notes.read().await.clone()
+    }
+
+    /// An agent's write to the notes, recorded so the person sees what was learned.
+    pub async fn write_note(
+        &self,
+        path: &str,
+        content: &str,
+        mode: crate::notes::WriteMode,
+    ) -> Result<crate::notes::Written> {
+        let notes = self
+            .notes()
+            .await
+            .context("notes are turned off in Settings")?;
+        let written = notes.write_as_agent(path, content, mode)?;
+        self.record(HarnessEvent::NoteWritten {
+            path: written.path.clone(),
+            created: written.created,
+        })
+        .await;
+        Ok(written)
     }
 
     pub async fn extras_snapshot(&self) -> crate::extensions::WorkerExtras {

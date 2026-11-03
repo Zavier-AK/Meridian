@@ -906,6 +906,40 @@ because the two numbers measure different things and have drifted apart before.
   unrecognized lines yield no events rather than failing a run, and parsing is covered by
   fixture tests.
 
+## Notes
+
+Notes are what Meridian remembers between projects: plain markdown files in one folder,
+`~/Documents/Meridian Notes` by default (change it, or turn notes off, in **Settings →
+Notes**). Point it at a folder inside your Obsidian vault and the notes show up there too.
+
+```
+Meridian Notes/
+├── me.md                 you: how you like to work. Agents never write this one
+├── projects/<name>.md    one per project: decisions, conventions, what's left
+└── topics/*.md           anything that carries across projects
+```
+
+**Less context is the default.** A session doesn't start with the whole folder:
+
+- The head agent is given the first 2,000 characters of `me.md` and the first 3,000 of
+  the current project's note. A note with nothing in it but headings is skipped.
+- Everything else, it finds with `notes_search` (short snippets, six at most) and reads
+  with `notes_read` only when it's relevant.
+- When your message plainly matches a note, Meridian adds a pointer to it (at most three,
+  each note once per session) so the head agent doesn't have to think to look. Weak
+  matches are left out.
+- Workers get no notes. The head agent passes on what a task needs.
+
+**Every write is shown.** Agents write with `notes_write`, only into `projects/` and
+`topics/`, and each write appears in the chat as *Started a note* or *Updated a note*
+with a link to it. When a plan finishes, the head agent is reminded to note anything a
+later session would need. Open **Notes** in the navigation rail to read or edit any of
+it, or **Show folder** to delete or move files; the files are the whole of it.
+
+![The Notes view: notes grouped into About you, Projects and Topics, with a project's note open](screenshots/notes.png)
+
+The CLI uses notes when given a folder: `harness-cli --notes ~/Documents/Meridian\ Notes chat`.
+
 ## Plugins
 
 A plugin is a folder with a `meridian-plugin.toml`. It can add:
