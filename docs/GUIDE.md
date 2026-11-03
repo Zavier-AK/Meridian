@@ -306,6 +306,21 @@ separate repositories inside it, two levels deep (`node_modules`, build folders 
 **Manrope**, and the Mac's own **System** font. Clicking one previews it across the whole
 app; Save keeps it. Voice can change it too ("set the font to IBM Plex").
 
+**Settings → Theme** is three colours:
+
+- **Base**, the background that every surface, border and text colour is derived from.
+  A light base gets dark text.
+- **Accent**, for buttons, selection, links and focus.
+- **Second accent**, for pull requests, the glow behind the window, and the gradient on
+  primary buttons.
+
+Pick each with its colour picker, or start from a preset: **Sakura** (the default), **Ember**
+(black, orange and gold), **Tide**, **Moss**, **Volt** and **Graphite**. Colours preview
+as you pick them, and Save keeps them. Voice works too: "set the base to black", "set the
+second accent to yellow".
+
+![Meridian in the Ember theme: a black base with orange and gold accents](screenshots/theme-ember.png)
+
 ## When Claude's sign-in fails
 
 If a Claude run fails to sign in ("OAuth token has expired", "could not be refreshed"),
@@ -323,11 +338,16 @@ differ from your terminal if they find different installs. Two fixes:
 
 For work with more than one step, the head agent calls `propose_plan` instead of
 delegating each piece. The plan opens in the **Plan** tab as one card per step: its
-title, its role, its task, and what it waits for. The idea comes from Kun Chen's
+title, its role, its task, and what it waits for.
+
+**It starts by itself** unless the autonomy dial is on **Ask**, the same rule as a
+single delegation. The board is then where you follow it, and **Stop plan** halts it.
+On **Ask** it waits for you to edit and run it, as below. A review, a question or an
+investigation isn't planned at all: the head agent hands it to one reviewer. The idea comes from Kun Chen's
 [Lavish](https://github.com/kunchenguid/lavish-axi): "visual plans, not walls of
 markdown". The running view is borrowed from Vibe Kanban's lanes.
 
-- **Before it runs**, you can:
+- **Before it runs** (on **Ask**), you can:
   - edit any task, retitle a step, switch its role, or remove it (whatever depended on
     it is unhooked);
   - comment on individual steps, or on the plan as a whole;
@@ -345,7 +365,8 @@ markdown". The running view is borrowed from Vibe Kanban's lanes.
 - **Stop plan** keeps unstarted steps from starting. The head agent is told how the plan
   ended, step by step.
 
-Headless, `harness-cli --run-plans` runs a proposed plan unedited.
+Headless, plans start by themselves too. Under `--autonomy ask`, `harness-cli --run-plans`
+runs a proposed plan unedited.
 
 ## Night shift
 
@@ -1052,8 +1073,8 @@ agent never lists them, so it stays a planner.
 
 - the head agent's default model and turn limit;
 - whether to send notifications;
-- the accent colour. It is one variable; hover, soft and text-on-accent colours are
-  derived from it.
+- the theme's three colours (see [look and feel](#look-and-feel)). Everything else is
+  derived from them.
 
 The CLI and the app share the extensions library in the app's data folder. Pass
 `--extensions <dir>` to the CLI to use a different one.

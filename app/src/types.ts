@@ -333,7 +333,7 @@ export type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
   | { kind: "tool"; name: string; toolUseId?: string; workerId?: string }
-  | { kind: "notice"; text: string; tone: "info" | "warn" | "error" }
+  | { kind: "notice"; text: string; tone: "info" | "warn" | "error"; planId?: string }
   /** An agent saved something to the notes. */
   | { kind: "note"; path: string; created: boolean }
   /** What a plugin command printed. */
@@ -446,7 +446,9 @@ export type AppSettings = {
   default_model: string | null;
   max_turns: number;
   notifications: boolean;
+  base: string | null;
   accent: string | null;
+  accent_2: string | null;
   /** A pairing from `fonts.ts`. */
   font: string;
   voice: VoiceSettings;

@@ -46,8 +46,9 @@ struct Cli {
     #[arg(long, global = true, default_value = "review", value_parser = parse_autonomy)]
     autonomy: harness_core::autonomy::Autonomy,
 
-    /// Run plans the head agent proposes, unedited. Headless, there is no board to
-    /// review them on; without this they are printed and left alone.
+    /// Run plans the head agent proposes under `--autonomy ask`, unedited. At other
+    /// levels plans start by themselves; under ask, without this, they are printed and
+    /// left alone.
     #[arg(long, global = true)]
     run_plans: bool,
 
