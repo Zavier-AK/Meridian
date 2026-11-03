@@ -14,7 +14,7 @@
      cherry blossom on a dark plum base. */
   --base: #16121a;
   --accent: #ff9ebb;
-  --accent-2: var(--accent-2);
+  --accent-2: #b69cff;
 
   /* Surfaces carry alpha: on macOS a vibrancy layer sits behind the window, and
      anything opaque here would punch a flat hole in the frosted glass. */
