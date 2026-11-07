@@ -10,6 +10,7 @@ use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 /// At most this many images per message.
 pub const MAX_IMAGES: usize = 6;
@@ -54,9 +55,8 @@ pub fn save(project_root: &Path, inputs: &[ImageInput]) -> Result<Vec<Image>> {
     // to open the path as written.
     let root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
     let dir = root.join(".harness").join("attachments");
-    let stamp = chrono_stamp();
     let mut images = Vec::new();
-    for (i, input) in inputs.iter().enumerate() {
+    for input in inputs.iter() {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(input.data.trim())
             .context("an attached image isn't valid base64")?;
@@ -70,7 +70,8 @@ pub fn save(project_root: &Path, inputs: &[ImageInput]) -> Result<Vec<Image>> {
             bail!("an attachment isn't a PNG, JPEG, GIF or WebP image");
         };
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        let path = dir.join(format!("{stamp}-{}.{ext}", i + 1));
+        let filename = format!("{}.{ext}", Uuid::new_v4());
+        let path = dir.join(&filename);
         std::fs::write(&path, &bytes).with_context(|| format!("saving {}", path.display()))?;
         images.push(Image {
             media_type,
@@ -100,13 +101,6 @@ pub fn note(images: &[Image]) -> String {
     )
 }
 
-/// Seconds since the epoch, plus a little more, so two messages never collide.
-fn chrono_stamp() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}-{:03}", now.as_secs(), now.subsec_millis())
-}
 
 #[cfg(test)]
 mod tests {
