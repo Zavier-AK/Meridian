@@ -582,6 +582,7 @@ name = "harness-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "futures",
  "harness-core",
@@ -597,6 +598,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "futures",
  "rand 0.9.5",
  "reqwest",

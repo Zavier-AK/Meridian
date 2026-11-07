@@ -4,11 +4,12 @@ import remarkGfm from "remark-gfm";
 import type { ChatItem, PermissionDecision } from "./types";
 import { compactTokens } from "./types";
 import { MeridianMark } from "./Brand";
+import { MAX_IMAGES, imageFiles, prepareImage, type ChatImage } from "./images";
 
 type Props = {
   items: ChatItem[];
   busy: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, images: ChatImage[]) => void;
   onStop: () => void;
   onSelectWorker: (id: string) => void;
   onUndo: (workerId: string) => void;
@@ -75,8 +76,34 @@ export default function HeadChat({
   mic,
 }: Props) {
   const [draft, setDraft] = useState("");
+  const [images, setImages] = useState<ChatImage[]>([]);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [dropping, setDropping] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /** Screenshots pasted, dropped or chosen: prepared, then shown above the text. */
+  async function addImages(files: File[]) {
+    if (files.length === 0) return;
+    setImageError(null);
+    const room = MAX_IMAGES - images.length;
+    if (room <= 0) {
+      setImageError(`At most ${MAX_IMAGES} images per message.`);
+      return;
+    }
+    const prepared: ChatImage[] = [];
+    for (const file of files.slice(0, room)) {
+      try {
+        prepared.push(await prepareImage(file, file.name || "Pasted image"));
+      } catch (err) {
+        setImageError(String(err instanceof Error ? err.message : err));
+      }
+    }
+    if (files.length > room) setImageError(`At most ${MAX_IMAGES} images per message.`);
+    setImages((prev) => [...prev, ...prepared].slice(0, MAX_IMAGES));
+    inputRef.current?.focus();
+  }
 
   // What was said lands after anything already typed, ready to edit.
   useEffect(() => {
@@ -104,9 +131,11 @@ export default function HeadChat({
 
   function submit() {
     const text = draft.trim();
-    if (!text || busy) return;
-    onSend(text);
+    if ((!text && images.length === 0) || busy) return;
+    onSend(text, images);
     setDraft("");
+    setImages([]);
+    setImageError(null);
   }
 
   return (
@@ -117,6 +146,18 @@ export default function HeadChat({
             case "user":
               return (
                 <div key={i} className="bubble user">
+                  {item.images && item.images.length > 0 && (
+                    <div className="bubble-images">
+                      {item.images.map((src, n) => (
+                        <img key={n} src={src} alt={`Attached image ${n + 1}`} />
+                      ))}
+                    </div>
+                  )}
+                  {!item.images?.length && item.attached ? (
+                    <span className="bubble-attached">
+                      {item.attached} image{item.attached === 1 ? "" : "s"} attached
+                    </span>
+                  ) : null}
                   {item.text}
                 </div>
               );
@@ -211,11 +252,55 @@ export default function HeadChat({
         </div>
       )}
 
-      <div className="composer">
+      <div
+        className={`composer ${dropping ? "dropping" : ""}`}
+        onDragOver={(e) => {
+          if (Array.from(e.dataTransfer.types).includes("Files")) {
+            e.preventDefault();
+            setDropping(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
+        }}
+        onDrop={(e) => {
+          const files = imageFiles(e.dataTransfer.files);
+          setDropping(false);
+          if (files.length > 0) {
+            e.preventDefault();
+            void addImages(files);
+          }
+        }}
+      >
+        {images.length > 0 && (
+          <div className="composer-images">
+            {images.map((image, n) => (
+              <span key={n} className="composer-image" title={image.name}>
+                <img src={image.preview} alt={image.name} />
+                <button
+                  className="composer-image-remove"
+                  onClick={() => setImages((prev) => prev.filter((_, m) => m !== n))}
+                  aria-label={`Remove ${image.name}`}
+                  title="Remove"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {imageError && <p className="composer-image-error">{imageError}</p>}
         <textarea
           ref={inputRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => {
+            const files = imageFiles(e.clipboardData.items);
+            if (files.length > 0) {
+              e.preventDefault();
+              void addImages(files);
+            }
+          }}
           onKeyDown={(e) => {
             // Enter sends; Shift+Enter is a newline; Escape stops a running turn.
             if (e.key === "Enter" && !e.shiftKey) {
@@ -230,7 +315,33 @@ export default function HeadChat({
           rows={2}
         />
         <div className="composer-bar">
-          <div className="composer-tools">{tools}</div>
+          <div className="composer-tools">
+            <button
+              className="composer-pill"
+              onClick={() => fileRef.current?.click()}
+              title="Attach screenshots or images (or paste, or drop them here)"
+              aria-label="Attach images"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="3" y="4" width="18" height="16" rx="3" />
+                <circle cx="9" cy="10" r="1.6" />
+                <path d="M21 16l-5-5-9 9" />
+              </svg>
+              Image
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              hidden
+              onChange={(e) => {
+                void addImages(imageFiles(e.target.files));
+                e.target.value = "";
+              }}
+            />
+            {tools}
+          </div>
           {model && (
             <span
               className="composer-model"
@@ -254,7 +365,7 @@ export default function HeadChat({
               </svg>
             </button>
           ) : (
-            <button className="send" onClick={submit} disabled={!draft.trim()} title="Send (Enter)" aria-label="Send">
+            <button className="send" onClick={submit} disabled={!draft.trim() && images.length === 0} title="Send (Enter)" aria-label="Send">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M12 19V5M5 12l7-7 7 7" />
               </svg>

@@ -812,6 +812,7 @@ async fn session_roles(
 async fn send_turn(
     state: State<'_, AppState>,
     text: String,
+    images: Option<Vec<harness_core::attachments::ImageInput>>,
     project: Option<String>,
 ) -> Result<(), String> {
     let key = key_for(&state, project).await?;
@@ -823,7 +824,10 @@ async fn send_turn(
     let Head::Live(orchestrator) = &mut session.head else {
         return Err("that project's head agent is suspended; open the project first".into());
     };
-    orchestrator.send(&text).await.map_err(|e| format!("{e:#}"))
+    orchestrator
+        .send_with_images(&text, images.as_deref().unwrap_or_default())
+        .await
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]

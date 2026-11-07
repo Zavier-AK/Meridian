@@ -94,6 +94,10 @@ enum Command {
 
         #[arg(long, default_value = "100")]
         max_turns: u32,
+
+        /// An image to attach to the first turn (PNG, JPEG, GIF or WebP). Repeatable.
+        #[arg(long = "image")]
+        images: Vec<std::path::PathBuf>,
     },
 
     /// Run only the MCP server, so the tool surface can be inspected with curl.
@@ -1058,7 +1062,18 @@ async fn main() -> Result<()> {
             turns,
             model,
             max_turns,
+            images,
         } => {
+            use base64::Engine as _;
+            let mut attached = Vec::new();
+            for path in images {
+                let bytes =
+                    std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+                attached.push(harness_core::attachments::ImageInput {
+                    media_type: String::new(),
+                    data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                });
+            }
             // The orchestrator's own stream is separate from the worker stream; merge
             // them onto one renderer so the transcript reads in order.
             let worker_events = rx;
@@ -1090,7 +1105,11 @@ async fn main() -> Result<()> {
             let mut orchestrator = orchestrator;
             for (index, turn) in turns.iter().enumerate() {
                 println!("\n=== turn {} ===\n> {turn}", index + 1);
-                orchestrator.send(turn).await?;
+                if index == 0 {
+                    orchestrator.send_with_images(turn, &attached).await?;
+                } else {
+                    orchestrator.send(turn).await?;
+                }
 
                 // Wait for this turn's result line before sending the next, so turns do
                 // not interleave. The cap keeps a hung backend from wedging the run.

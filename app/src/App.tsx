@@ -19,6 +19,7 @@ import AutonomyDial, { nextStop } from "./AutonomyDial";
 import PlanBoard from "./PlanBoard";
 import NotesView from "./NotesView";
 import { MeridianMark } from "./Brand";
+import type { ChatImage } from "./images";
 import PluginPanel, { type PanelContext } from "./PluginPanel";
 import PluginCommands from "./PluginCommands";
 import NightView from "./NightView";
@@ -604,11 +605,14 @@ export default function App() {
   }, [session, refreshUsage, refreshProjects]);
 
   /** `shown` is how it reads in the chat, when that differs — a 🎙 for what was said. */
-  async function send(text: string, shown: string = text) {
-    setChat((prev) => [...prev, { kind: "user", text: shown }]);
+  async function send(text: string, shown: string = text, images: ChatImage[] = []) {
+    setChat((prev) => [...prev, { kind: "user", text: shown, images: images.map((i) => i.preview) }]);
     setBusy(true);
     try {
-      await invoke("send_turn", { text });
+      await invoke("send_turn", {
+        text,
+        images: images.length ? images.map(({ media_type, data }) => ({ media_type, data })) : null,
+      });
     } catch (err) {
       setBusy(false);
       setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]);
@@ -1170,7 +1174,7 @@ export default function App() {
                 items={chat}
                 onStop={() => void stopTurn()}
                 busy={busy}
-                onSend={send}
+                onSend={(text, images) => void send(text, text, images)}
                 onSelectWorker={setSelectedWorker}
                 onUndo={(id) => void undoMerge(id)}
                 onOpenNote={(path) => {
@@ -1878,7 +1882,7 @@ function historyToChat(events: HarnessEvent[]): ChatItem[] {
   for (const event of events) {
     switch (event.type) {
       case "user_message":
-        items.push({ kind: "user", text: event.text });
+        items.push({ kind: "user", text: event.text, attached: event.attachments?.length });
         break;
       case "assistant_text":
         if (!event.partial) items.push({ kind: "assistant", text: event.text });

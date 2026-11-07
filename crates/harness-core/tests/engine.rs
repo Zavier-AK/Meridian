@@ -725,6 +725,7 @@ async fn the_head_agents_conversation_is_kept_across_sessions() {
         .record_head_event(HarnessEvent::UserMessage {
             run_id: "orchestrator-s1".into(),
             text: "plan the release".into(),
+            attachments: vec![],
         })
         .await;
     // What the agent says arrives through `note_event`, as it does from the real CLI.

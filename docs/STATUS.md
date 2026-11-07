@@ -77,6 +77,18 @@ output can merge anything.
 
 ### Working and verified
 
+- **Images in the chat.** Paste, drop or pick images; the head agent gets them inline,
+  and each is saved under `.harness/attachments/` for workers.
+  - Tested in the engine: the type is checked by its bytes, not its claimed type, along
+    with size and count limits; paths are absolute even from a relative project.
+  - Real CLI (haiku): asked what an attached image showed, the head agent read it
+    correctly. Asked to have the builder open it, the builder (in its own worktree)
+    read the saved path and reported the same text.
+  - Rendered headlessly: a simulated paste and drop give thumbnails, a 3200×2000
+    screenshot goes out as 1600×1000, and the sent message shows the images.
+  - Not run here: drag and drop inside the real macOS window. Its native file-drop
+    handling is turned off (`dragDropEnabled: false`) so the page receives the drop.
+
 - **The head agent can read GitHub.** Read-only `gh` commands are pre-approved for it,
   and its brief says whether `gh` is signed in and as whom. Run with the real CLI (haiku)
   against a stand-in `gh`: asked "can you list my github repos?", it ran

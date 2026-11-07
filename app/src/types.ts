@@ -63,7 +63,7 @@ export type HarnessEvent =
       status: string;
       windows: QuotaWindow[];
     }
-  | { type: "user_message"; run_id: string; text: string };
+  | { type: "user_message"; run_id: string; text: string; attachments?: string[] };
 
 /** Mirrors `harness_core::isolation::Patch`. */
 export type Patch = {
@@ -330,7 +330,7 @@ export type UsageRow = {
 
 /** One rendered item in the head transcript. */
 export type ChatItem =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; images?: string[]; attached?: number }
   | { kind: "assistant"; text: string }
   | { kind: "tool"; name: string; toolUseId?: string; workerId?: string }
   | { kind: "notice"; text: string; tone: "info" | "warn" | "error"; planId?: string }

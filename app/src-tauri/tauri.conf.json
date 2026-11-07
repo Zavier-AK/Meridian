@@ -14,6 +14,7 @@
     "windows": [
       {
         "title": "Meridian",
+        "dragDropEnabled": false,
         "width": 1280,
         "height": 820,
         "minWidth": 900,
