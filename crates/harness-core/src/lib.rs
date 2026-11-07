@@ -11,6 +11,7 @@
 
 pub mod account;
 pub mod agents;
+pub mod attachments;
 pub mod autonomy;
 pub mod availability;
 pub mod detection;

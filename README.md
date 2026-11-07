@@ -37,6 +37,8 @@ instead of API billing, and local models cost nothing.
 - **Extend it.** Plugins add skills, agent tools, one-click commands, hooks and tabs of
   their own. Describe one and an agent builds it. Nothing a plugin runs is allowed until
   you've reviewed it. See [plugins](docs/GUIDE.md#plugins).
+- **Show it.** Paste or drop a screenshot into the chat box. The head agent sees it, and
+  can hand it to a worker.
 - **Talk to it.** Hold ⌥Space anywhere: "what's waiting for me?", "merge the builder's
   change", "find me a cheaper flight". Web tasks run in their own browser and always ask
   before sending, buying or posting.

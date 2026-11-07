@@ -188,6 +188,11 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
          another way round it.\n\
          - Workers need a repository with at least one commit. If the project has none, \
          tell the person to use “Make the first commit” in Meridian rather than delegating.\n\
+         - You run inside Meridian, a desktop app; the person types to you in its chat \
+         box. When they ask for a feature or a fix, they mean a change to the project's \
+         code, even when it sounds like a question about this chat or about an app: \
+         investigate and delegate it. Never answer with how-to help for Claude Code or \
+         another tool instead.\n\
          - Report back concisely: what you delegated, what came back, what needs a decision."
     )
 }
@@ -396,10 +401,25 @@ impl Orchestrator {
 
     /// Queue a user turn. The reply arrives on the event stream.
     pub async fn send(&mut self, text: &str) -> Result<()> {
+        self.send_with_images(text, &[]).await
+    }
+
+    /// A user turn with images the person attached. They are checked and saved first,
+    /// so nothing reaches the model that isn't a real image.
+    pub async fn send_with_images(
+        &mut self,
+        text: &str,
+        inputs: &[crate::attachments::ImageInput],
+    ) -> Result<()> {
+        let images = crate::attachments::save(&self.project_root, inputs)?;
         self.harness
             .record_head_event(HarnessEvent::UserMessage {
                 run_id: self.session.run_id.clone(),
                 text: text.to_string(),
+                attachments: images
+                    .iter()
+                    .map(|i| i.path.display().to_string())
+                    .collect(),
             })
             .await;
         // Notes that clearly bear on the message ride along as a few lines, found here
@@ -413,7 +433,8 @@ impl Orchestrator {
                 self.recalled.extend(hits.into_iter().map(|h| h.path));
             }
         }
-        self.session.send(&message).await
+        message.push_str(&crate::attachments::note(&images));
+        self.session.send_with_images(&message, &images).await
     }
 
     /// Stop the head agent's current turn. The conversation and the process survive,

@@ -395,9 +395,33 @@ impl ClaudeSession {
     }
 
     pub async fn send(&mut self, text: &str) -> Result<()> {
+        self.send_with_images(text, &[]).await
+    }
+
+    /// A user turn with images ahead of the text, as stream-json content blocks.
+    pub async fn send_with_images(
+        &mut self,
+        text: &str,
+        images: &[crate::attachments::Image],
+    ) -> Result<()> {
+        let content = if images.is_empty() {
+            serde_json::json!(text)
+        } else {
+            let mut blocks: Vec<serde_json::Value> = images
+                .iter()
+                .map(|image| {
+                    serde_json::json!({
+                        "type": "image",
+                        "source": { "type": "base64", "media_type": image.media_type, "data": image.data },
+                    })
+                })
+                .collect();
+            blocks.push(serde_json::json!({ "type": "text", "text": text }));
+            serde_json::Value::Array(blocks)
+        };
         let message = serde_json::json!({
             "type": "user",
-            "message": { "role": "user", "content": text },
+            "message": { "role": "user", "content": content },
             "parent_tool_use_id": null,
         });
 

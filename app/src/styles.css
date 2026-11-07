@@ -1675,12 +1675,12 @@ button.pill.link-pill:hover:not(:disabled) { background: var(--accent-soft); }
 .plugin-panel-error { padding: 20px; }
 .pane-tabs .plugin-tab { font-style: normal; }
 .plugin-commands { position: relative; }
-.plugin-commands .composer-pill {
+.composer-tools .composer-pill {
   display: inline-flex; align-items: center; gap: 6px;
   border: none; background: transparent; color: var(--muted);
   padding: 6px 10px; border-radius: 999px; font-size: 13px; white-space: nowrap;
 }
-.plugin-commands .composer-pill:hover:not(:disabled), .plugin-commands .composer-pill.open { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+.composer-tools .composer-pill:hover:not(:disabled), .composer-tools .composer-pill.open { color: var(--text); background: rgba(255, 255, 255, 0.07); }
 .plugin-commands-menu {
   position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 30;
   list-style: none; margin: 0; padding: 6px; min-width: 260px; max-height: 320px; overflow-y: auto;
@@ -1801,3 +1801,20 @@ button.theme-colour-reset { font-size: 12px; padding: 2px 6px; }
 .chat-welcome .meridian-mark { margin-bottom: 10px; opacity: 0.9; }
 .chat-welcome .muted { font-size: 12px; }
 .notes-empty { margin: 0; padding: 8px; font-size: 12px; }
+
+/* ---------- images in the chat ---------- */
+
+.composer.dropping { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.composer-images { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 2px 8px; }
+.composer-image { position: relative; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-strong); flex: none; }
+.composer-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+button.composer-image-remove {
+  position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0;
+  border-radius: 50%; border: none; background: rgba(0, 0, 0, 0.62); color: #fff;
+  font-size: 14px; line-height: 20px; text-align: center;
+}
+button.composer-image-remove:hover:not(:disabled) { background: rgba(0, 0, 0, 0.8); }
+.composer-image-error { margin: 0 2px 6px; font-size: 12px; color: var(--error); }
+.bubble-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.bubble-images img { max-width: 220px; max-height: 160px; border-radius: 10px; display: block; object-fit: cover; }
+.bubble-attached { display: block; font-size: 12px; opacity: 0.75; margin-bottom: 4px; }

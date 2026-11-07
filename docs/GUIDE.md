@@ -75,6 +75,21 @@ a first-class tool call:
 `approve_merge` is deliberately *not* an MCP tool. It exists only on the host side, driven
 by a click in the app, so no amount of model output can land code on its own.
 
+### Showing it a screenshot
+
+Paste an image into the chat box (⌘V), drop one on it, or click **Image** to pick files.
+Up to six go with a message, shown as thumbnails you can remove before sending.
+
+- **The head agent sees them itself**, in the message.
+- **Workers can't**, since each sees only its task text. So every image is also saved in
+  the project's `.harness/attachments/` (git-excluded). The head agent is given the
+  path to put in a task brief, and a worker opens it with its own Read tool.
+- **Big screenshots are scaled down first**, to 1,600 pixels on the long edge. A Retina
+  capture then costs a fraction of the tokens, and the model sees as much detail as
+  before. PNG, JPEG, GIF and WebP are accepted, up to 5 MB each after scaling.
+
+The CLI takes them too: `harness-cli chat --image shot.png "make it look like this"`.
+
 ### Claude roles delegate the way Claude already does
 
 Opus is trained to hand work to subagents with Claude Code's own `Agent` tool, so the

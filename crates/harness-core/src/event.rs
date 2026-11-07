@@ -295,6 +295,9 @@ pub enum HarnessEvent {
     UserMessage {
         run_id: String,
         text: String,
+        /// Images attached to it, as the paths they were saved to.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
     },
 
     /// Emitted from the Claude CLI's `system/api_retry`. `error` carries the category,
