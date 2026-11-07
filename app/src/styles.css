@@ -9,24 +9,35 @@
  * which is what makes user themes a later config change rather than a rewrite.
  */
 :root {
-  /* Base tint. Kept dark and slightly plum so pink reads as deliberate, not as a
-     stray hue on neutral grey. */
-  --bg: rgba(22, 18, 26, 0.55);
-  --panel: rgba(34, 27, 40, 0.58);
-  --panel-strong: rgba(30, 24, 36, 0.86);
+  /* The three colours a person can choose (Settings → Theme). Everything below is
+     derived from them, so a theme is these three lines. The defaults are Sakura:
+     cherry blossom on a dark plum base. */
+  --base: #16121a;
+  --accent: #ff9ebb;
+  --accent-2: #b69cff;
 
-  --border: rgba(255, 183, 202, 0.14);
-  --border-strong: rgba(255, 183, 202, 0.26);
+  /* Surfaces carry alpha: on macOS a vibrancy layer sits behind the window, and
+     anything opaque here would punch a flat hole in the frosted glass. */
+  --base-solid: color-mix(in srgb, var(--base) 94%, white);
+  --bg: color-mix(in srgb, var(--base) 55%, transparent);
+  --panel: color-mix(in srgb, color-mix(in srgb, var(--base) 90%, var(--accent)) 58%, transparent);
+  --panel-strong: color-mix(in srgb, color-mix(in srgb, var(--base) 94%, var(--accent)) 86%, transparent);
+  --well: color-mix(in srgb, color-mix(in srgb, var(--base), black 45%) 50%, transparent);
 
+  --border: color-mix(in srgb, var(--accent) 16%, transparent);
+  --border-strong: color-mix(in srgb, var(--accent) 30%, transparent);
+
+  /* Text, set from the base's lightness by appSettings.ts when a base is chosen. */
   --text: #f5eaef;
   --muted: #b09aa5;
 
-  /* Sakura. --accent is the interactive colour; --on-accent rides on top of it, so it
-     is dark rather than white — pink this light will not carry white text. */
-  --accent: #ff9ebb;
-  --accent-strong: #ff7ea6;
-  --accent-soft: rgba(255, 158, 187, 0.15);
+  /* --accent is the interactive colour; --on-accent rides on top of it, dark or
+     light by the accent's own lightness. */
+  --accent-strong: color-mix(in srgb, var(--accent) 82%, white);
+  --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-2-soft: color-mix(in srgb, var(--accent-2) 15%, transparent);
   --on-accent: #2a1520;
+  --gradient: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, var(--accent-2)));
 
   --ok: #8fd6a8;
   --warn: #f3c67c;
@@ -50,8 +61,8 @@ body::before {
   pointer-events: none;
   z-index: -1;
   background:
-    radial-gradient(60% 45% at 12% 0%, rgba(255, 158, 187, 0.10), transparent 70%),
-    radial-gradient(50% 40% at 100% 100%, rgba(186, 120, 200, 0.08), transparent 70%);
+    radial-gradient(60% 45% at 12% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%),
+    radial-gradient(50% 40% at 100% 100%, color-mix(in srgb, var(--accent-2) 10%, transparent), transparent 70%);
 }
 
 html, body { background: transparent; }
@@ -80,12 +91,15 @@ button {
 button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--accent-soft); }
 button:disabled { opacity: 0.4; cursor: default; }
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--gradient);
+  border-color: transparent;
   color: var(--on-accent);
   font-weight: 600;
 }
-button.primary:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+button.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--accent-strong), color-mix(in srgb, var(--accent-strong) 55%, var(--accent-2)));
+  border-color: transparent;
+}
 button.danger { color: var(--error); }
 button.ghost { border: none; background: none; color: var(--muted); }
 button.ghost:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); }
@@ -120,7 +134,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
   border-radius: var(--radius);
   padding: 28px;
 }
-.gate-card h1 { margin: 0 0 6px; font-size: 22px; }
+.gate-brand { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.gate-card h1 { margin: 0; font-size: 22px; display: inline-flex; align-items: center; gap: 8px; }
 .gate-card p { margin: 0 0 18px; }
 .gate-card label { display: block; font-weight: 600; margin-bottom: 6px; }
 .gate-card button.wide { margin-top: 16px; }
@@ -141,7 +156,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
-.title { font-weight: 650; }
+.title { font-weight: 650; display: inline-flex; align-items: center; gap: 7px; }
 /* Where the window is dragged from when there is no title bar. */
 .window-drag { position: fixed; top: 0; left: 0; right: 0; height: 32px; z-index: 5; }
 .add-project .window-drag { display: none; } /* the start screen shown as a dialog */
@@ -413,7 +428,7 @@ a, a:hover, u, ins, abbr[title] { text-decoration: none; }
 .drawer-scrim {
   position: fixed;
   inset: 0;
-  background: rgba(10, 6, 12, 0.5);
+  background: var(--well);
   display: flex;
   justify-content: flex-end;
 }
@@ -543,12 +558,12 @@ button.link {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 183, 202, 0.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 183, 202, 0.3); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--accent) 30%, transparent); background-clip: padding-box; }
 
 /* Rail header: the fleet is editable mid-session, so the way in lives next to it. */
 .rail-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -710,14 +725,6 @@ input.chip-input { width: 140px; font-size: 11px; padding: 3px 8px; }
 .field { display: flex; align-items: center; gap: 12px; font-size: 13px; }
 .field > span { width: 90px; color: var(--muted); }
 .field input { width: 220px; }
-.swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-button.swatch {
-  width: 26px; height: 26px; padding: 0; border-radius: 50%;
-  border: 2px solid transparent; cursor: pointer;
-}
-button.swatch.theme { width: auto; padding: 0 10px; border-radius: 13px; border-color: var(--border); font-size: 11px; }
-button.swatch.chosen { border-color: var(--text); }
-.swatches input[type="color"] { width: 30px; height: 26px; padding: 0; border: none; background: none; }
 /* The global input rule sizes text fields; a checkbox must stay a checkbox. */
 .toggle-row input[type="checkbox"] { width: auto; flex: none; margin: 0; padding: 0; accent-color: var(--accent); }
 .settings-view { background: var(--panel); }
@@ -789,7 +796,7 @@ button.swatch.chosen { border-color: var(--text); }
   border-radius: 20px;
   border: 1px solid var(--border-strong);
   /* Opaque: whatever is behind it in the chat must not show through the slider. */
-  background: linear-gradient(var(--panel-strong), var(--panel-strong)), #1b151e;
+  background: linear-gradient(var(--panel-strong), var(--panel-strong)), var(--base-solid);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
   z-index: 30;
   display: flex;
@@ -1389,7 +1396,7 @@ button.change-row:disabled { opacity: 1; cursor: default; }
 .flow-edge.muted .flow-edge-line { stroke: color-mix(in srgb, var(--text) 18%, transparent); stroke-dasharray: 2 5; }
 .flow-edge.review .flow-edge-line { stroke: var(--warn); stroke-dasharray: 7 5; }
 .flow-edge.landed .flow-edge-line { stroke: var(--ok); }
-.flow-edge.pr .flow-edge-line { stroke: #b69cff; }
+.flow-edge.pr .flow-edge-line { stroke: var(--accent-2); }
 .flow-edge.feeds .flow-edge-line { stroke: color-mix(in srgb, var(--accent) 60%, transparent); stroke-dasharray: 2 4; }
 .flow-edge:hover .flow-edge-line { stroke-width: 3; }
 @keyframes flow-dash { to { stroke-dashoffset: -12; } }
@@ -1398,14 +1405,14 @@ button.change-row:disabled { opacity: 1; cursor: default; }
 .flow-arrow.waiting path, .flow-arrow.review path { fill: var(--warn); }
 .flow-arrow.failed path { fill: var(--error); }
 .flow-arrow.landed path { fill: var(--ok); }
-.flow-arrow.pr path { fill: #b69cff; }
+.flow-arrow.pr path { fill: var(--accent-2); }
 .flow-arrow.muted path { fill: color-mix(in srgb, var(--text) 18%, transparent); }
 .flow-edge-label { font-size: 11px; fill: var(--muted); font-family: var(--font-body); }
 
 .flow-pulse { fill: var(--accent); filter: drop-shadow(0 0 6px var(--accent)); }
 .flow-pulse.result, .flow-pulse.landed { fill: var(--ok); filter: drop-shadow(0 0 6px var(--ok)); }
 .flow-pulse.review, .flow-pulse.ask, .flow-pulse.revision { fill: var(--warn); filter: drop-shadow(0 0 6px var(--warn)); }
-.flow-pulse.pr { fill: #b69cff; }
+.flow-pulse.pr { fill: var(--accent-2); }
 
 .flow-node rect { fill: var(--panel-strong); stroke: var(--border-strong); stroke-width: 1; }
 .flow-node-title { font-family: var(--font-display); font-size: 13px; font-weight: 600; fill: var(--text); }
@@ -1420,7 +1427,7 @@ button.change-row:disabled { opacity: 1; cursor: default; }
   50% { filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 60%, transparent)); }
 }
 .flow-node.hub.branch rect { stroke: var(--ok); }
-.flow-node.hub.github rect { stroke: #b69cff; }
+.flow-node.hub.github rect { stroke: var(--accent-2); }
 .flow-node.worker { cursor: pointer; }
 .flow-node.worker:hover rect, .flow-node.worker:focus rect { stroke: var(--accent); }
 .flow-node.worker:focus { outline: none; }
@@ -1456,7 +1463,7 @@ button.change-row:disabled { opacity: 1; cursor: default; }
 .flow-log-kind.task, .flow-log-kind.message { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .flow-log-kind.result, .flow-log-kind.landed { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 .flow-log-kind.review, .flow-log-kind.ask, .flow-log-kind.revision { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
-.flow-log-kind.pr { color: #b69cff; border-color: color-mix(in srgb, #b69cff 45%, transparent); }
+.flow-log-kind.pr { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 45%, transparent); }
 .flow-log-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   .flow-edge.live .flow-edge-line, .flow-node.hub.head.busy rect, .flow-node.worker.live .flow-dot { animation: none; }
@@ -1664,7 +1671,7 @@ button.pill.link-pill:hover:not(:disabled) { background: var(--accent-soft); }
 /* ---------- plugins ---------- */
 
 .plugin-panel { flex: 1; min-height: 0; display: flex; padding: 0; }
-.plugin-frame { flex: 1; width: 100%; height: 100%; border: none; background: #1b151e; }
+.plugin-frame { flex: 1; width: 100%; height: 100%; border: none; background: var(--base-solid); }
 .plugin-panel-error { padding: 20px; }
 .pane-tabs .plugin-tab { font-style: normal; }
 .plugin-commands { position: relative; }
@@ -1678,7 +1685,7 @@ button.pill.link-pill:hover:not(:disabled) { background: var(--accent-soft); }
   position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 30;
   list-style: none; margin: 0; padding: 6px; min-width: 260px; max-height: 320px; overflow-y: auto;
   border-radius: 16px; border: 1px solid var(--border-strong);
-  background: linear-gradient(var(--panel-strong), var(--panel-strong)), #1b151e;
+  background: linear-gradient(var(--panel-strong), var(--panel-strong)), var(--base-solid);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
 }
 .plugin-commands-menu button {
@@ -1756,3 +1763,41 @@ button.notes-item.active { background: var(--accent-soft); color: var(--accent);
   padding: 12px; border-radius: 10px;
 }
 .note-saved { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+
+/* ---------- theme ---------- */
+
+.theme-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; margin: 4px 0 12px; }
+button.theme-preset {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end;
+  gap: 8px; height: 76px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08); overflow: hidden;
+}
+button.theme-preset:hover:not(:disabled) { border-color: var(--border-strong); }
+button.theme-preset.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.theme-preset-mark { position: absolute; top: 10px; left: 12px; width: 26px; height: 26px; border-radius: 9px 9px 9px 3px; }
+.theme-preset-name { font-size: 12px; font-weight: 600; }
+.theme-colours { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+label.theme-colour {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 12px; background: rgba(0, 0, 0, 0.14); cursor: pointer;
+}
+label.theme-colour > span:nth-child(2) { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.theme-colour-name { font-size: 13px; }
+label.theme-colour input[type="color"] {
+  width: 34px; height: 34px; padding: 0; border: none; border-radius: 10px; background: none; cursor: pointer; flex: none;
+}
+label.theme-colour input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+label.theme-colour input[type="color"]::-webkit-color-swatch { border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 10px; }
+button.theme-colour-reset { font-size: 12px; padding: 2px 6px; }
+
+/* ---------- brand ---------- */
+
+/* The mark is drawn in currentColor: the accent, so it follows the theme. */
+.meridian-mark { flex: none; display: block; color: var(--accent); }
+.chat-welcome {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
+  margin: 10vh auto 0; max-width: 380px; font-size: 15px;
+}
+.chat-welcome .meridian-mark { margin-bottom: 10px; opacity: 0.9; }
+.chat-welcome .muted { font-size: 12px; }
+.notes-empty { margin: 0; padding: 8px; font-size: 12px; }

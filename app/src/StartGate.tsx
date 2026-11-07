@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import FleetSetup from "./FleetSetup";
 import type { FleetInspection, ProjectStatus, SessionInfo } from "./types";
+import { MeridianMark } from "./Brand";
 
 type Props = { onStarted: (info: SessionInfo) => void };
 
@@ -106,7 +107,10 @@ export default function StartGate({ onStarted }: Props) {
       {/* No title bar on this screen either: the strip along the top moves the window. */}
       <div className="window-drag" data-tauri-drag-region />
       <div className="gate-card">
-        <h1>Meridian</h1>
+        <div className="gate-brand">
+          <MeridianMark size={44} />
+          <h1>Meridian</h1>
+        </div>
         <p className="muted">
           A head agent that plans, and a fleet of workers that do the work — on your
           subscriptions, not API billing.

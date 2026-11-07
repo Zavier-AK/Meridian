@@ -27,6 +27,52 @@ use crate::roles::{Isolation, Provider, Role};
 /// not enough to start doing the work itself.
 pub const ORCHESTRATOR_TOOLS: &[&str] = &["Read", "Grep", "Glob"];
 
+/// GitHub reads the head agent may run without asking: listing and viewing only. Each is
+/// a permission rule for the `Bash` tool it can already ask for, so this adds nothing to
+/// its prompt. Anything that changes a repository (clone, push, create, merge) still
+/// goes to the person.
+pub const HEAD_GITHUB_READS: &[&str] = &[
+    "Bash(gh repo list:*)",
+    "Bash(gh repo view:*)",
+    "Bash(gh pr list:*)",
+    "Bash(gh pr view:*)",
+    "Bash(gh pr diff:*)",
+    "Bash(gh pr checks:*)",
+    "Bash(gh pr status:*)",
+    "Bash(gh issue list:*)",
+    "Bash(gh issue view:*)",
+    "Bash(gh auth status:*)",
+    "Bash(gh api user)",
+];
+
+/// What the head agent is told about GitHub, from what `gh` can do on this machine.
+pub fn github_brief(state: crate::publish::GhState, login: Option<&str>) -> String {
+    use crate::publish::GhState;
+    match state {
+        GhState::Ready => {
+            let who = login.map(|l| format!(" as @{l}")).unwrap_or_default();
+            format!(
+                "\n\nGitHub: the `gh` CLI is signed in{who}, so you can see the person's \
+                 GitHub account. These run without asking: `gh repo list --limit 100` (their \
+                 repositories), `gh repo view OWNER/REPO`, `gh pr list`, `gh pr view N`, \
+                 `gh pr diff N`, `gh pr checks N`, `gh issue list`, `gh issue view N`. When \
+                 they mention their repositories, pull requests or issues, look them up \
+                 with these instead of asking for a URL. Anything that changes something \
+                 (`gh repo clone`, `git push`, `gh pr create`, `gh pr merge`) waits for \
+                 them to allow it: say what you are about to run, then run it."
+            )
+        }
+        GhState::SignedOut => "\n\nGitHub: the `gh` CLI is installed but not signed in, so \
+             you cannot see the person's GitHub account. If they ask about it, tell them to \
+             run `gh auth login` in a terminal and then ask again."
+            .to_string(),
+        GhState::Missing => "\n\nGitHub: the `gh` CLI is not installed, so you cannot see \
+             the person's GitHub account. If they ask about it, tell them to install it \
+             (`brew install gh`), run `gh auth login`, and then ask again."
+            .to_string(),
+    }
+}
+
 /// The brief appended to the head agent's system prompt.
 pub fn orchestrator_brief(roles: &[crate::engine::RoleInfo]) -> String {
     orchestrator_brief_with(roles, &[])
@@ -121,9 +167,10 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
          - Each worker sees only the task text you send it. Write self-contained briefs; \
          it cannot see this conversation.\n\
          - For work with more than one step, call `propose_plan` rather than delegating \
-         the steps yourself: the person reviews it on a board, and the harness runs it, in \
-         parallel where the steps allow. Then end your turn. For a single piece of work, \
-         just delegate it.\n\
+         the steps yourself: the harness runs it, in parallel where the steps allow, and \
+         shows it on a board. Then end your turn. For a single piece of work, just \
+         delegate it. A review, a question or an investigation is a single piece of work: \
+         delegate it to one reviewer rather than planning it.\n\
          - Use `delegate_async` plus `check_workers` when several pieces of work are \
          independent, so they run in parallel.\n\
          - Workers that edit files run in their own git worktree. Their changes are NOT on \
@@ -149,6 +196,7 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
 pub fn orchestrator_role(model: Option<String>, max_turns: Option<u32>) -> Role {
     let mut tools: Vec<String> = ORCHESTRATOR_TOOLS.iter().map(|s| s.to_string()).collect();
     tools.extend(McpServer::allowed_tool_names());
+    tools.extend(HEAD_GITHUB_READS.iter().map(|s| s.to_string()));
 
     Role {
         provider: Provider::Claude,
@@ -205,6 +253,31 @@ pub fn head_builtin_tools(head: &Role, native: &[Role], skills: bool) -> Vec<Str
         }
     }
     tools
+}
+
+/// Ask `gh` what it can do here, and who it is signed in as. Bounded, so a slow network
+/// never holds up the session: past the limit, the head agent is told only what is known.
+async fn github_brief_for(project_root: &Path) -> String {
+    use crate::publish::GhState;
+    let probe = async {
+        let state = crate::publish::gh_state(project_root).await;
+        let login = if state == GhState::Ready {
+            crate::publish::run(project_root, "gh", &["api", "user", "--jq", ".login"], None)
+                .await
+                .ok()
+                .map(|l| l.trim().to_string())
+                .filter(|l| {
+                    !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                })
+        } else {
+            None
+        };
+        (state, login)
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), probe).await {
+        Ok((state, login)) => github_brief(state, login.as_deref()),
+        Err(_) => github_brief(GhState::Ready, None),
+    }
 }
 
 /// A running head chat: the MCP server, the Claude process, and the event stream.
@@ -277,6 +350,7 @@ impl Orchestrator {
         if let Some(notes) = harness.notes().await {
             brief.push_str(&notes.head_context(project_root));
         }
+        brief.push_str(&github_brief_for(project_root).await);
 
         let run_id = format!("orchestrator-{}", harness.session_id());
         harness
@@ -471,7 +545,42 @@ mod tests {
         // `propose_plan`, and search/read/write for notes). If this grows, the
         // per-session floor grows with it, so the assertion is a tripwire rather than
         // trivia.
-        assert_eq!(orchestrator_role(None, None).effective_tools().len(), 13);
+        // The GitHub read rules are permissions for `Bash`, not tools of their own.
+        let tools = orchestrator_role(None, None).effective_tools();
+        assert_eq!(tools.iter().filter(|t| !t.starts_with("Bash(")).count(), 13);
+    }
+
+    #[test]
+    fn the_head_may_read_github_but_not_change_it() {
+        let tools = orchestrator_role(None, None).effective_tools();
+        for read in [
+            "Bash(gh repo list:*)",
+            "Bash(gh pr view:*)",
+            "Bash(gh pr diff:*)",
+        ] {
+            assert!(tools.iter().any(|t| t == read), "{read} in {tools:?}");
+        }
+        for write in [
+            "clone", "push", "create", "merge", "edit", "delete", "close",
+        ] {
+            assert!(
+                !tools
+                    .iter()
+                    .any(|t| t.starts_with("Bash(") && t.contains(write)),
+                "a GitHub write ({write}) must go to the person"
+            );
+        }
+        assert!(!tools.iter().any(|t| t == "Bash"), "no blanket shell");
+    }
+
+    #[test]
+    fn the_brief_says_what_github_can_do_here() {
+        use crate::publish::GhState;
+        let ready = github_brief(GhState::Ready, Some("octo"));
+        assert!(ready.contains("signed in as @octo") && ready.contains("gh repo list"));
+        assert!(ready.contains("instead of asking for a URL"));
+        assert!(github_brief(GhState::SignedOut, None).contains("gh auth login"));
+        assert!(github_brief(GhState::Missing, None).contains("brew install gh"));
     }
 
     #[test]

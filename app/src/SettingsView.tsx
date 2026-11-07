@@ -5,6 +5,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { AppSettings, VoiceSettings } from "./types";
 import VoiceSettingsPanel from "./VoiceSettings";
 import { FONTS, applyFont } from "./fonts";
+import { PRESETS, THEME_DEFAULTS, applyTheme, isLightColour } from "./appSettings";
 import SignInPanel from "./SignInPanel";
 import OpenRouterSettings from "./OpenRouterSettings";
 
@@ -12,9 +13,6 @@ type Props = {
   onSaved: (settings: AppSettings) => void;
   onClose: () => void;
 };
-
-/** A few from the theme's own family, plus whatever the colour picker gives. */
-const SWATCHES = ["#ff9ebb", "#b69cff", "#7cc4ff", "#7ee0b5", "#f3c67c", "#ff8a6b"];
 
 /** Aliases the Claude CLI resolves itself, so they never go stale with a model release. */
 const MODELS = ["opus", "sonnet", "haiku"];
@@ -44,6 +42,19 @@ export default function SettingsView({ onSaved, onClose }: Props) {
   const savedFont = useRef<string | null>(null);
   savedFont.current = saved?.font ?? null;
   useEffect(() => () => applyFont(savedFont.current), []);
+
+  // Colours apply as they're picked; unsaved ones go back when Settings closes.
+  const savedTheme = useRef<AppSettings | null>(null);
+  savedTheme.current = saved;
+  useEffect(() => {
+    if (settings) applyTheme(settings);
+  }, [settings?.base, settings?.accent, settings?.accent_2]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(
+    () => () => {
+      if (savedTheme.current) applyTheme(savedTheme.current);
+    },
+    [],
+  );
 
   if (!settings) {
     return (
@@ -216,34 +227,73 @@ export default function SettingsView({ onSaved, onClose }: Props) {
       </div>
 
       <div className="settings-section">
-        <h3>Accent</h3>
-        <div className="swatches" role="radiogroup" aria-label="Accent colour">
-          <button
-            role="radio"
-            aria-checked={settings.accent === null}
-            className={`swatch theme ${settings.accent === null ? "chosen" : ""}`}
-            onClick={() => update({ accent: null })}
-            title="The theme's own"
-          >
-            Theme
-          </button>
-          {SWATCHES.map((colour) => (
-            <button
-              key={colour}
-              role="radio"
-              aria-checked={settings.accent === colour}
-              aria-label={colour}
-              className={`swatch ${settings.accent === colour ? "chosen" : ""}`}
-              style={{ background: colour }}
-              onClick={() => update({ accent: colour })}
-            />
+        <h3>Theme</h3>
+        <p className="muted">
+          Three colours: the base everything is tinted from, the accent for buttons, selection and
+          links, and a second accent for pull requests, the glow behind the window and the gradients.
+        </p>
+        <div className="theme-presets" role="radiogroup" aria-label="Ready-made themes">
+          {PRESETS.map((preset) => {
+            const chosen =
+              settings.base === preset.base && settings.accent === preset.accent && settings.accent_2 === preset.accent_2;
+            const shown = {
+              base: preset.base ?? THEME_DEFAULTS.base,
+              accent: preset.accent ?? THEME_DEFAULTS.accent,
+              accent_2: preset.accent_2 ?? THEME_DEFAULTS.accent_2,
+            };
+            return (
+              <button
+                key={preset.name}
+                role="radio"
+                aria-checked={chosen}
+                className={`theme-preset ${chosen ? "chosen" : ""}`}
+                style={{ background: shown.base }}
+                onClick={() => update({ base: preset.base, accent: preset.accent, accent_2: preset.accent_2 })}
+              >
+                <span
+                  className="theme-preset-mark"
+                  style={{ background: `linear-gradient(135deg, ${shown.accent}, ${shown.accent_2})` }}
+                />
+                <span className="theme-preset-name" style={{ color: isLightColour(shown.base) ? "#141218" : "#f4f1f5" }}>
+                  {preset.name}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="theme-colours">
+          {(
+            [
+              ["base", "Base"],
+              ["accent", "Accent"],
+              ["accent_2", "Second accent"],
+            ] as const
+          ).map(([key, label]) => (
+            <label key={key} className="theme-colour">
+              <input
+                type="color"
+                value={settings[key] ?? THEME_DEFAULTS[key]}
+                onChange={(event) => update({ [key]: event.target.value } as Partial<AppSettings>)}
+                aria-label={label}
+              />
+              <span>
+                <span className="theme-colour-name">{label}</span>
+                <span className="mono muted">{settings[key] ?? "theme"}</span>
+              </span>
+              {settings[key] && (
+                <button
+                  className="ghost theme-colour-reset"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    update({ [key]: null } as Partial<AppSettings>);
+                  }}
+                  title="Back to the theme's own"
+                >
+                  Reset
+                </button>
+              )}
+            </label>
           ))}
-          <input
-            type="color"
-            value={settings.accent ?? "#ff9ebb"}
-            onChange={(event) => update({ accent: event.target.value })}
-            aria-label="Pick any colour"
-          />
         </div>
       </div>
 
