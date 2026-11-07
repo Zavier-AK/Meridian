@@ -23,6 +23,13 @@ if [ "$1" != "--no-pull" ] && git rev-parse --abbrev-ref --symbolic-full-name '@
 fi
 
 echo "→ Building (a few minutes the first time; much faster after)"
+# A Conda environment puts its own compilers and build tools first, which breaks the C++
+# build of the voice engine; build with the system's.
+if [ -n "$CONDA_PREFIX" ]; then
+  PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^$CONDA_PREFIX" | paste -sd: -)"
+  export PATH
+  unset CONDA_PREFIX CC CXX AR LD CFLAGS CXXFLAGS LDFLAGS
+fi
 cd "$ROOT/app"
 npm install --no-audit --no-fund
 npm run tauri build -- --bundles app

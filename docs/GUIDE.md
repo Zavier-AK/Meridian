@@ -761,6 +761,10 @@ builds a release bundle, quits a running Meridian, replaces `/Applications/Merid
 and opens it. Keep it in the Dock from there. Your projects, settings and notes carry
 over between versions, because they don't live in the app.
 
+The app is built for macOS 11 and later; whisper.cpp, the voice engine, needs at least
+10.15. If a Conda environment is active, the script builds with the system's compilers
+instead of Conda's, which break that C++ build.
+
 An app opened from the Dock doesn't get a terminal's `PATH`, so on start Meridian asks
 your login shell for it. `claude`, `codex`, `gh` and `node` are then found wherever
 Homebrew, npm or nvm put them. Voice still loads its helper from this folder, so keep
