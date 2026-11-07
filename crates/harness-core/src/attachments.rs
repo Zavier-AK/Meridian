@@ -101,7 +101,6 @@ pub fn note(images: &[Image]) -> String {
     )
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +130,24 @@ mod tests {
         let note = note(&images);
         assert!(note.contains(&images[0].path.display().to_string()));
         assert!(note.contains("Read tool"));
+    }
+
+    #[test]
+    fn two_saves_at_once_never_share_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = || ImageInput {
+            media_type: "image/png".into(),
+            data: PNG_1X1.into(),
+        };
+        let first = save(dir.path(), &[one(), one()]).unwrap();
+        let second = save(dir.path(), &[one()]).unwrap();
+        let paths: std::collections::HashSet<_> = first
+            .iter()
+            .chain(&second)
+            .map(|i| i.path.clone())
+            .collect();
+        assert_eq!(paths.len(), 3, "every image gets its own file");
+        assert!(paths.iter().all(|p| p.exists()));
     }
 
     #[test]
