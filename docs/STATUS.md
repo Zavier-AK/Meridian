@@ -77,6 +77,12 @@ output can merge anything.
 
 ### Working and verified
 
+- **The head agent can read GitHub.** Read-only `gh` commands are pre-approved for it,
+  and its brief says whether `gh` is signed in and as whom. Run with the real CLI (haiku)
+  against a stand-in `gh`: asked "can you list my github repos?", it ran
+  `gh repo list --limit 100` without a prompt and listed them. Asked to clone one, it
+  asked for permission instead of running the clone.
+
 - **Plans start by themselves** unless the dial is on Ask. Tested in the engine: under
   Review a proposed plan runs without anyone pressing Run, and under Ask it waits and
   nothing starts. The head agent is told to give a review or investigation to one

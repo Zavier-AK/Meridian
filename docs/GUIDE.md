@@ -299,6 +299,14 @@ separate repositories inside it, two levels deep (`node_modules`, build folders 
   with agent** hands the pull request to the head agent, which reads it with `gh` and
   has a reviewer go through it. **Check out** brings its branch here.
 
+**The head agent can see your GitHub account** when `gh` is signed in: ask "what repos
+do I have?" or "what's open on the calendar repo?" and it looks them up. It's told at
+the start of each session whether `gh` is signed in, and as whom. Listing and viewing
+(`gh repo list`, `gh pr view`, `gh pr diff`, `gh issue list` and the like) run without
+asking. Anything that changes something, such as a clone, a push, or opening or merging
+a pull request, waits for you to allow it in the chat. If `gh` isn't installed or signed
+in, it tells you to run `gh auth login`.
+
 ## Look and feel
 
 **Settings → Typeface** offers six pairings, bundled with the app so nothing is fetched:
