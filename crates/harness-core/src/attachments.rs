@@ -34,7 +34,7 @@ pub struct Image {
 }
 
 /// The type the bytes really are, from their first bytes, whatever was claimed.
-fn sniff(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+pub fn sniff(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
     match bytes {
         [0x89, b'P', b'N', b'G', ..] => Some(("image/png", "png")),
         [0xFF, 0xD8, 0xFF, ..] => Some(("image/jpeg", "jpg")),
@@ -80,6 +80,54 @@ pub fn save(project_root: &Path, inputs: &[ImageInput]) -> Result<Vec<Image>> {
         });
     }
     Ok(images)
+}
+
+/// Agents' screenshots can be bigger than what a person may attach; still bounded.
+pub const MAX_SHOT_BYTES: usize = 12 * 1024 * 1024;
+
+/// Save an image an agent's tool returned under `<project>/.harness/screenshots/`, and
+/// return where. Refused unless the bytes really are an image.
+pub fn save_shot(project_root: &Path, data: &str) -> Result<PathBuf> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .context("an agent's image isn't valid base64")?;
+    if bytes.len() > MAX_SHOT_BYTES {
+        bail!("an agent's image is over 12 MB");
+    }
+    let Some((_, ext)) = sniff(&bytes) else {
+        bail!("an agent's image isn't a PNG, JPEG, GIF or WebP");
+    };
+    let root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let dir = root.join(".harness").join("screenshots");
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join(format!("{}.{ext}", Uuid::new_v4()));
+    std::fs::write(&path, &bytes).with_context(|| format!("saving {}", path.display()))?;
+    Ok(path)
+}
+
+/// Read back an image saved under a project's `.harness/screenshots/` or
+/// `.harness/attachments/`, as a `data:` URL. Anything else is refused, so the UI can't
+/// be made to read arbitrary files through this.
+pub fn read_saved(project_root: &Path, path: &Path) -> Result<String> {
+    let root = std::fs::canonicalize(project_root).context("the project folder is gone")?;
+    let path = std::fs::canonicalize(path).context("that image is gone")?;
+    let allowed = ["screenshots", "attachments"]
+        .iter()
+        .any(|dir| path.starts_with(root.join(".harness").join(dir)));
+    if !allowed {
+        bail!("not one of this project's saved images");
+    }
+    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    if bytes.len() > MAX_SHOT_BYTES {
+        bail!("that image is too large to show");
+    }
+    let Some((media_type, _)) = sniff(&bytes) else {
+        bail!("that file isn't an image");
+    };
+    Ok(format!(
+        "data:{media_type};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 /// The note that rides with the message, so the head agent can hand an image on.
@@ -130,6 +178,34 @@ mod tests {
         let note = note(&images);
         assert!(note.contains(&images[0].path.display().to_string()));
         assert!(note.contains("Read tool"));
+    }
+
+    #[test]
+    fn an_agents_image_is_saved_and_read_back_but_nothing_else_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = save_shot(dir.path(), PNG_1X1).unwrap();
+        assert!(path.starts_with(
+            std::fs::canonicalize(dir.path())
+                .unwrap()
+                .join(".harness/screenshots")
+        ));
+        let url = read_saved(dir.path(), &path).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+
+        // Not an image, and not in the saved folders: both refused.
+        let text = base64::engine::general_purpose::STANDARD.encode(b"hello");
+        assert!(save_shot(dir.path(), &text).is_err());
+        let secret = dir.path().join("secret.png");
+        std::fs::write(
+            &secret,
+            base64::engine::general_purpose::STANDARD
+                .decode(PNG_1X1)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(read_saved(dir.path(), &secret).is_err());
+        let escape = dir.path().join(".harness/screenshots/../../secret.png");
+        assert!(read_saved(dir.path(), &escape).is_err());
     }
 
     #[test]

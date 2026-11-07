@@ -77,6 +77,24 @@ output can merge anything.
 
 ### Working and verified
 
+- **Agents' screenshots in the chat.** Images in any agent's tool results are saved under
+  `.harness/screenshots/` and shown in the chat; the head agent has a `screenshot` tool
+  (headless Chrome, localhost only); workers get a `screenshots` skill.
+  - Tested in the engine and app: image blocks are parsed from tool results, but URL
+    images are never fetched; only real images are saved; images are read back only
+    from the project's saved folders (path tricks refused); only loopback addresses are
+    allowed; the login-shell `PATH` is parsed and merged.
+  - Real CLI (haiku), with Chromium standing in for Chrome: asked to screenshot a local
+    page, the head agent called `screenshot`, described the page correctly, and the image
+    was saved. A builder opening an image produced a saved image the same way.
+  - Rendered headlessly: a head agent image and two worker images as labelled rows, and
+    the full-size view opening and closing.
+  - Not run here: a worker taking its own screenshot through Bash in the headless CLI,
+    where nobody is there to approve the command. In the app that's an Allow prompt.
+- **Installed as an app.** `scripts/install-mac.sh` builds and installs
+  `/Applications/Meridian.app`, and on start the app adopts the login shell's `PATH`.
+  Not run here: the script and a Dock launch, which need a Mac.
+
 - **Images in the chat.** Paste, drop or pick images; the head agent gets them inline,
   and each is saved under `.harness/attachments/` for workers.
   - Tested in the engine: the type is checked by its bytes, not its claimed type, along

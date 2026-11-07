@@ -562,13 +562,13 @@ mod tests {
 
     #[test]
     fn tool_surface_stays_small_to_keep_the_context_floor_down() {
-        // Three read tools plus ten harness tools (the six delegation tools,
-        // `propose_plan`, and search/read/write for notes). If this grows, the
+        // Three read tools plus eleven harness tools (the six delegation tools,
+        // `propose_plan`, search/read/write for notes, and `screenshot`). If this grows, the
         // per-session floor grows with it, so the assertion is a tripwire rather than
         // trivia.
         // The GitHub read rules are permissions for `Bash`, not tools of their own.
         let tools = orchestrator_role(None, None).effective_tools();
-        assert_eq!(tools.iter().filter(|t| !t.starts_with("Bash(")).count(), 13);
+        assert_eq!(tools.iter().filter(|t| !t.starts_with("Bash(")).count(), 14);
     }
 
     #[test]

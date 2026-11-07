@@ -37,8 +37,9 @@ instead of API billing, and local models cost nothing.
 - **Extend it.** Plugins add skills, agent tools, one-click commands, hooks and tabs of
   their own. Describe one and an agent builds it. Nothing a plugin runs is allowed until
   you've reviewed it. See [plugins](docs/GUIDE.md#plugins).
-- **Show it.** Paste or drop a screenshot into the chat box. The head agent sees it, and
-  can hand it to a worker.
+- **Show it, and see it.** Paste or drop a screenshot into the chat box: the head agent
+  sees it and can hand it to a worker. Screenshots the agents take of what they build
+  appear in the chat too.
 - **Talk to it.** Hold ⌥Space anywhere: "what's waiting for me?", "merge the builder's
   change", "find me a cheaper flight". Web tasks run in their own browser and always ask
   before sending, buying or posting.
@@ -78,12 +79,16 @@ and optionally Ollama or LM Studio for local models.
 
 ```bash
 git clone https://github.com/Zavier-AK/Meridian.git && cd Meridian
-cd app && npm install && npm run tauri dev
+./scripts/install-mac.sh
 ```
 
+That builds Meridian and installs it in Applications, so from then on it opens from
+Launchpad, Spotlight or the Dock. **To update, run `./scripts/install-mac.sh` again**: it
+pulls the latest code, rebuilds and reinstalls. Working on Meridian itself? `cd app &&
+npm install && npm run tauri dev` runs it with live reload instead.
+
 Pick a project folder and press **Start session**. If the folder isn't a git repository
-or has no fleet (`roles.toml`) yet, the start screen offers to set both up. After pulling
-updates, run `npm install` in `app/` again.
+or has no fleet (`roles.toml`) yet, the start screen offers to set both up.
 
 Prefer a terminal? The same engine runs headless:
 

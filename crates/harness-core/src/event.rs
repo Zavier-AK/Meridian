@@ -105,6 +105,18 @@ pub enum HarnessEvent {
         content: String,
         is_error: bool,
     },
+    /// An image an agent's tool returned: a screenshot it took, a picture it opened.
+    /// Parsed with `data` (base64); the app saves it and sends the UI `path` instead, so
+    /// neither the event log nor the UI channel carries the bytes.
+    ToolImage {
+        run_id: String,
+        tool_use_id: String,
+        media_type: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        path: String,
+    },
     WorkerSpawned {
         worker_id: String,
         role: String,
@@ -350,6 +362,7 @@ impl HarnessEvent {
             | Self::Thinking { run_id, .. }
             | Self::ToolCall { run_id, .. }
             | Self::ToolResult { run_id, .. }
+            | Self::ToolImage { run_id, .. }
             | Self::ApiRetry { run_id, .. }
             | Self::TurnInterrupted { run_id }
             | Self::PermissionRequest { run_id, .. }

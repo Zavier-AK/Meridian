@@ -90,6 +90,23 @@ Up to six go with a message, shown as thumbnails you can remove before sending.
 
 The CLI takes them too: `harness-cli chat --image shot.png "make it look like this"`.
 
+### Seeing what the agents see
+
+Any image an agent's tools return appears in the chat as a row of thumbnails, labelled
+with who took it: the head agent, or a worker's role. Click one to open it full size
+(Esc closes it).
+
+- **The head agent has a `screenshot` tool.** It captures a page served on this machine
+  (the dev server, a preview) with the Chrome on your Mac, in headless mode. It sees the
+  picture, and so do you. Only `localhost` pages are allowed. Chromium, Brave or Edge
+  work too; set `MERIDIAN_CHROME` to use another.
+- **Workers get a bundled `screenshots` skill.** It shows them how to capture the running
+  app with headless Chrome and open the picture with their Read tool. That way they check
+  a visual change, and compare it with any mockup they were given, before reporting.
+- **Images are saved** in the project's `.harness/screenshots/` (git-excluded). The chat
+  and the event log hold only the path. The app reads images back only from that folder
+  and `.harness/attachments/`.
+
 ### Claude roles delegate the way Claude already does
 
 Opus is trained to hand work to subagents with Claude Code's own `Agent` tool, so the
@@ -732,10 +749,22 @@ cargo run -p harness-cli -- night "Add tests" --metric "grep -c '#\[test\]' src/
 cargo run -p harness-cli -- usage --hours 5
 cargo run -p harness-cli -- voice --eval   # how voice reads a labelled set of phrases
 
-# Desktop app
+# Desktop app, installed in /Applications (run again to update)
+./scripts/install-mac.sh
+# …or with live reload, for working on Meridian itself
 cd app && npm install && npm run tauri dev
 cd app/voice-sidecar && npm install        # optional: Laya, the browser and the natural voice
 ```
+
+**Installed, it opens like any app.** `scripts/install-mac.sh` pulls the latest code,
+builds a release bundle, quits a running Meridian, replaces `/Applications/Meridian.app`
+and opens it. Keep it in the Dock from there. Your projects, settings and notes carry
+over between versions, because they don't live in the app.
+
+An app opened from the Dock doesn't get a terminal's `PATH`, so on start Meridian asks
+your login shell for it. `claude`, `codex`, `gh` and `node` are then found wherever
+Homebrew, npm or nvm put them. Voice still loads its helper from this folder, so keep
+the clone where it is.
 
 **After pulling, run `npm install` in `app/` again.** New features sometimes add frontend
 packages, and Vite reports a missing one as `Failed to resolve import "…"` rather than
