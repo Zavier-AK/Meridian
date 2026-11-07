@@ -2701,6 +2701,38 @@ impl Harness {
     /// Persist and broadcast an event on behalf of the head agent — what the person
     /// typed, or that they stopped a turn. These originate in the app rather than in the
     /// agent's output, so nothing else would record them.
+    /// An image from an agent's tool, saved to the project and swapped for its path, so
+    /// the bytes go no further than this. One that can't be saved is dropped (an empty
+    /// path), never forwarded raw.
+    pub fn keep_image(&self, event: HarnessEvent) -> HarnessEvent {
+        match event {
+            HarnessEvent::ToolImage {
+                run_id,
+                tool_use_id,
+                media_type,
+                data,
+                ..
+            } if !data.is_empty() => {
+                let path =
+                    match crate::attachments::save_shot(self.workspaces.project_root(), &data) {
+                        Ok(saved) => saved.display().to_string(),
+                        Err(err) => {
+                            tracing::warn!("not keeping an agent's image: {err:#}");
+                            String::new()
+                        }
+                    };
+                HarnessEvent::ToolImage {
+                    run_id,
+                    tool_use_id,
+                    media_type,
+                    data: String::new(),
+                    path,
+                }
+            }
+            other => other,
+        }
+    }
+
     pub async fn record_head_event(&self, event: HarnessEvent) {
         self.record(event).await;
     }

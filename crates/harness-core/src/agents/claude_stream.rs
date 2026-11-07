@@ -403,13 +403,45 @@ pub fn parse_line(run_id: &str, line: &str) -> Result<ParsedLine, String> {
 
             for block in blocks {
                 if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                    let tool_use_id = block
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    // A screenshot or an opened picture comes back as image blocks
+                    // beside (or instead of) text. Each becomes its own event.
+                    for item in block
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if item.get("type").and_then(Value::as_str) != Some("image") {
+                            continue;
+                        }
+                        let source = item.get("source");
+                        let base64 = source.and_then(|s| s.get("type")).and_then(Value::as_str)
+                            == Some("base64");
+                        if let (true, Some(data)) = (
+                            base64,
+                            source.and_then(|s| s.get("data")).and_then(Value::as_str),
+                        ) {
+                            out.events.push(HarnessEvent::ToolImage {
+                                run_id: key.clone(),
+                                tool_use_id: tool_use_id.clone(),
+                                media_type: source
+                                    .and_then(|s| s.get("media_type"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("image/png")
+                                    .to_string(),
+                                data: data.to_string(),
+                                path: String::new(),
+                            });
+                        }
+                    }
                     out.events.push(HarnessEvent::ToolResult {
                         run_id: key.clone(),
-                        tool_use_id: block
-                            .get("tool_use_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
+                        tool_use_id,
                         content: flatten_content(block.get("content").unwrap_or(&Value::Null)),
                         is_error: block
                             .get("is_error")
@@ -633,6 +665,32 @@ mod tests {
         let parsed = parse_line("run-1", line).unwrap();
         // Not the parent run: the UI needs to nest this, not interleave it.
         assert_eq!(parsed.events[0].stream_key(), "tu_9");
+    }
+
+    #[test]
+    fn images_in_a_tool_result_become_their_own_events() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_9","content":[
+            {"type":"text","text":"took it"},
+            {"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"AAAA"}},
+            {"type":"image","source":{"type":"url","url":"https://example.com/x.png"}}]}]}}"#;
+        let parsed = parse_line("run-1", line).unwrap();
+        let images: Vec<_> = parsed
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                HarnessEvent::ToolImage {
+                    tool_use_id,
+                    media_type,
+                    data,
+                    ..
+                } => Some((tool_use_id.as_str(), media_type.as_str(), data.as_str())),
+                _ => None,
+            })
+            .collect();
+        // Only inline images: a URL is never fetched on the agent's say-so.
+        assert_eq!(images, [("tu_9", "image/jpeg", "AAAA")]);
+        assert!(parsed.events.iter().any(|e| matches!(e,
+            HarnessEvent::ToolResult { content, .. } if content == "took it")));
     }
 
     #[test]

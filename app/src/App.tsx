@@ -70,6 +70,8 @@ export default function App() {
   // What moved between you, the head agent and the workers, newest first.
   const [flows, setFlows] = useState<Flow[]>([]);
   const workersRef = useRef<Record<string, Worker>>({});
+  /** A native subagent's run, by the tool call that started it, to its role. */
+  const subagentRoles = useRef<Record<string, string>>({});
   /** The project's night shift: running, or the last one's report. */
   const [night, setNight] = useState<NightReport | null>(null);
   const [nightGoal, setNightGoal] = useState<{ goal: string | null; at: number } | null>(null);
@@ -504,6 +506,9 @@ export default function App() {
         return;
       }
 
+      if (payload.type === "subagent_started") {
+        subagentRoles.current[payload.tool_use_id] = payload.subagent_type;
+      }
       setChat((prev) => reduceChat(prev, payload, headRun));
       const flow = toFlow(payload, headRun.current, workersRef.current);
       if (flow) setFlows((prev) => [flow, ...prev].slice(0, 300));
@@ -1175,6 +1180,11 @@ export default function App() {
                 onStop={() => void stopTurn()}
                 busy={busy}
                 onSend={(text, images) => void send(text, text, images)}
+                labelFor={(runId) =>
+                  runId === headRun.current
+                    ? "Head agent"
+                    : workers[runId]?.role ?? subagentRoles.current[runId] ?? "A worker"
+                }
                 onSelectWorker={setSelectedWorker}
                 onUndo={(id) => void undoMerge(id)}
                 onOpenNote={(path) => {
@@ -1432,6 +1442,9 @@ function reduceChat(
     case "tool_call":
       if (event.run_id !== headRun.current) return prev;
       return [...prev, { kind: "tool", name: event.name, toolUseId: event.tool_use_id }];
+
+    case "tool_image":
+      return addShot(prev, event.run_id, event.path);
 
     case "tool_result": {
       // A delegation's result names the worker it started; linking the chip to it is what
@@ -1877,10 +1890,23 @@ const CHANGES_CODE = new Set<HarnessEvent["type"]>([
 ]);
 
 /** The head agent's earlier conversation, rebuilt from its recorded events. */
+/** An agent's image joins the row of the one before it, from the same agent. */
+function addShot(prev: ChatItem[], runId: string, path: string | undefined): ChatItem[] {
+  if (!path) return prev;
+  const last = prev[prev.length - 1];
+  if (last?.kind === "shots" && last.runId === runId) {
+    return [...prev.slice(0, -1), { ...last, paths: [...last.paths, path] }];
+  }
+  return [...prev, { kind: "shots", runId, paths: [path] }];
+}
+
 function historyToChat(events: HarnessEvent[]): ChatItem[] {
-  const items: ChatItem[] = [];
+  let items: ChatItem[] = [];
   for (const event of events) {
     switch (event.type) {
+      case "tool_image":
+        items = addShot(items, event.run_id, event.path);
+        break;
       case "user_message":
         items.push({ kind: "user", text: event.text, attached: event.attachments?.length });
         break;

@@ -66,6 +66,10 @@ const BUNDLED: &[(&str, &str)] = &[
         "meridian-plugins",
         include_str!("../../../skills/meridian-plugins/SKILL.md"),
     ),
+    (
+        "screenshots",
+        include_str!("../../../skills/screenshots/SKILL.md"),
+    ),
 ];
 
 /// How deep an import looks for skill folders. Deep enough for a repository that groups
@@ -705,7 +709,13 @@ mod tests {
         let names: Vec<_> = skills.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
-            ["worktree", "review", "risky-changes", "meridian-plugins"]
+            [
+                "worktree",
+                "review",
+                "risky-changes",
+                "meridian-plugins",
+                "screenshots"
+            ]
         );
         assert!(skills
             .iter()
@@ -766,7 +776,13 @@ mod tests {
     fn no_enabled_skills_means_no_plugin() {
         let dir = tempfile::tempdir().unwrap();
         let extensions = Extensions::new(dir.path());
-        for name in ["worktree", "review", "risky-changes", "meridian-plugins"] {
+        for name in [
+            "worktree",
+            "review",
+            "risky-changes",
+            "meridian-plugins",
+            "screenshots",
+        ] {
             extensions.set_skill_enabled(name, false).unwrap();
         }
         assert!(extensions.worker_extras().unwrap().plugin_dir.is_none());

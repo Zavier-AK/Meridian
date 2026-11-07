@@ -29,6 +29,8 @@ export type HarnessEvent =
   | { type: "thinking"; run_id: string; text: string }
   | { type: "tool_call"; run_id: string; tool_use_id: string; name: string; input: unknown }
   | { type: "tool_result"; run_id: string; tool_use_id: string; content: string; is_error: boolean }
+  | { type: "tool_image"; run_id: string; tool_use_id: string; media_type: string; path?: string }
+  | { type: "subagent_started"; run_id: string; task_id: string; tool_use_id: string; subagent_type: string; description: string }
   | { type: "worker_spawned"; worker_id: string; role: string; provider: string; model: string | null; isolation: string; cwd: string; number?: number; task?: string }
   | { type: "worker_status_changed"; worker_id: string; status: WorkerStatus }
   | { type: "worker_finished"; worker_id: string; summary: string; usage: Usage; diff: DiffStat | null; is_error: boolean }
@@ -331,6 +333,8 @@ export type UsageRow = {
 /** One rendered item in the head transcript. */
 export type ChatItem =
   | { kind: "user"; text: string; images?: string[]; attached?: number }
+  /** Images an agent's tools returned, in a row: screenshots it took, pictures it opened. */
+  | { kind: "shots"; runId: string; paths: string[] }
   | { kind: "assistant"; text: string }
   | { kind: "tool"; name: string; toolUseId?: string; workerId?: string }
   | { kind: "notice"; text: string; tone: "info" | "warn" | "error"; planId?: string }

@@ -5,11 +5,14 @@ import type { ChatItem, PermissionDecision } from "./types";
 import { compactTokens } from "./types";
 import { MeridianMark } from "./Brand";
 import { MAX_IMAGES, imageFiles, prepareImage, type ChatImage } from "./images";
+import AgentShot from "./AgentShot";
 
 type Props = {
   items: ChatItem[];
   busy: boolean;
   onSend: (text: string, images: ChatImage[]) => void;
+  /** Who an agent run is, for its images: "Head agent", "builder". */
+  labelFor?: (runId: string) => string;
   onStop: () => void;
   onSelectWorker: (id: string) => void;
   onUndo: (workerId: string) => void;
@@ -60,6 +63,7 @@ export default function HeadChat({
   items,
   busy,
   onSend,
+  labelFor,
   onStop,
   onSelectWorker,
   onUndo,
@@ -82,6 +86,19 @@ export default function HeadChat({
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [enlarged, setEnlarged] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!enlarged) return;
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setEnlarged(null);
+      }
+    };
+    window.addEventListener("keydown", close, true);
+    return () => window.removeEventListener("keydown", close, true);
+  }, [enlarged]);
 
   /** Screenshots pasted, dropped or chosen: prepared, then shown above the text. */
   async function addImages(files: File[]) {
@@ -149,7 +166,7 @@ export default function HeadChat({
                   {item.images && item.images.length > 0 && (
                     <div className="bubble-images">
                       {item.images.map((src, n) => (
-                        <img key={n} src={src} alt={`Attached image ${n + 1}`} />
+                        <img key={n} src={src} alt={`Attached image ${n + 1}`} onClick={() => setEnlarged(src)} />
                       ))}
                     </div>
                   )}
@@ -159,6 +176,20 @@ export default function HeadChat({
                     </span>
                   ) : null}
                   {item.text}
+                </div>
+              );
+            case "shots":
+              return (
+                <div key={i} className="shots">
+                  <span className="shots-label">
+                    {labelFor?.(item.runId) ?? "An agent"} · {item.paths.length} image
+                    {item.paths.length === 1 ? "" : "s"}
+                  </span>
+                  <div className="shots-strip">
+                    {item.paths.map((path) => (
+                      <AgentShot key={path} path={path} onOpen={setEnlarged} />
+                    ))}
+                  </div>
                 </div>
               );
             case "assistant":
@@ -240,6 +271,15 @@ export default function HeadChat({
         )}
         <div ref={endRef} />
       </div>
+
+      {enlarged && (
+        <div className="shot-lightbox" role="dialog" aria-label="Image, full size" onClick={() => setEnlarged(null)}>
+          <img src={enlarged} alt="Full size" onClick={(e) => e.stopPropagation()} />
+          <button className="shot-lightbox-close" onClick={() => setEnlarged(null)} aria-label="Close (Esc)">
+            ×
+          </button>
+        </div>
+      )}
 
       {needsFirstCommit && (
         <div className="first-commit">

@@ -165,6 +165,16 @@ pub struct NotesSearchParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ScreenshotParams {
+    /// A page served on this machine, such as the dev server: "http://localhost:5173/".
+    pub url: String,
+    /// Viewport width in pixels; 1280 if left out.
+    pub width: Option<u32>,
+    /// Viewport height in pixels; 800 if left out.
+    pub height: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NotePathParams {
     /// The note's path in the notes folder, as search gave it: "topics/tauri-gotchas.md".
     pub path: String,
@@ -399,6 +409,33 @@ impl HarnessTools {
     }
 
     #[tool(
+        name = "screenshot",
+        description = "Take a screenshot of a page served on this machine (the dev server, a \
+                       preview: http://localhost:PORT/...) and see it. Use it to check what \
+                       a change looks like before telling the person it's done. The person \
+                       sees every screenshot in the chat too. Only localhost pages; it uses \
+                       the Chrome installed on this Mac."
+    )]
+    async fn screenshot(
+        &self,
+        Parameters(params): Parameters<ScreenshotParams>,
+    ) -> rmcp::model::CallToolResult {
+        use base64::Engine as _;
+        use rmcp::model::{CallToolResult, ContentBlock};
+        let (width, height) = (params.width.unwrap_or(1280), params.height.unwrap_or(800));
+        match crate::screenshot::capture(&params.url, width, height).await {
+            Ok(png) => CallToolResult::success(vec![
+                ContentBlock::image(
+                    base64::engine::general_purpose::STANDARD.encode(png),
+                    "image/png",
+                ),
+                ContentBlock::text(format!("{} at {width}×{height}", params.url)),
+            ]),
+            Err(err) => CallToolResult::error(vec![ContentBlock::text(format!("{err:#}"))]),
+        }
+    }
+
+    #[tool(
         name = "notes_read",
         description = "Read one note in full, by the path search gave."
     )]
@@ -532,6 +569,7 @@ impl McpServer {
             "notes_search",
             "notes_read",
             "notes_write",
+            "screenshot",
         ]
         .iter()
         .map(|t| format!("mcp__{SERVER_NAME}__{t}"))

@@ -35,6 +35,7 @@ pub mod quota;
 pub mod revise;
 pub mod roles;
 pub mod roles_patch;
+pub mod screenshot;
 pub mod store;
 pub mod verify;
 pub mod voice;

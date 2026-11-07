@@ -220,6 +220,10 @@ fn render(event: &HarnessEvent, streaming: &mut bool) {
     };
 
     match event {
+        HarnessEvent::ToolImage { path, .. } if !path.is_empty() => {
+            end_stream(streaming);
+            println!("  ▣ image: {path}");
+        }
         HarnessEvent::SessionStarted {
             provider,
             model,
@@ -475,10 +479,11 @@ fn spawn_renderer(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut streaming = false;
-        while let Some(event) = events.recv().await {
+        while let Some(mut event) = events.recv().await {
             // Backpressure only matters while the engine is still alive; rendering the
             // tail of the stream after it is gone is still worth doing.
             if let Some(harness) = harness.upgrade() {
+                event = harness.keep_image(event);
                 harness.note_event(&event).await;
                 if let HarnessEvent::PlanUpdated { plan } = &event {
                     if run_plans && plan.status == harness_core::plan::PlanStatus::Draft {

@@ -8,6 +8,7 @@
 mod plugins;
 mod preview_probe;
 mod settings;
+mod shell_env;
 mod voice;
 
 use harness_core::agents::claude::PermissionDecision;
@@ -230,6 +231,9 @@ fn forward_events(
 ) {
     tokio::spawn(async move {
         while let Some(event) = events.recv().await {
+            // An agent's image is saved and swapped for its path before anything else
+            // sees it: the log and the UI get a path, never the bytes.
+            let event = harness.keep_image(event);
             harness.note_event(&event).await;
             plugins::fire_hooks(harness.workspaces().project_root(), &event);
             match &event {
@@ -828,6 +832,28 @@ async fn send_turn(
         .send_with_images(&text, images.as_deref().unwrap_or_default())
         .await
         .map_err(|e| format!("{e:#}"))
+}
+
+/// An image an agent took, or one the person attached, as a `data:` URL for the chat.
+/// Only from that project's `.harness/screenshots/` or `.harness/attachments/`.
+#[tauri::command]
+async fn read_image(
+    state: State<'_, AppState>,
+    path: String,
+    project: Option<String>,
+) -> Result<String, String> {
+    let key = key_for(&state, project).await?;
+    let root = {
+        let projects = state.projects.lock().await;
+        let session = projects.get(&key).ok_or("no session for that project")?;
+        session.harness.workspaces().project_root().to_path_buf()
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        harness_core::attachments::read_saved(&root, std::path::Path::new(&path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -2295,6 +2321,9 @@ pub fn run() {
                 .unwrap_or_else(|_| "harness_core=info,harness_app_lib=info".into()),
         )
         .init();
+    // Opened from the Dock, the app can't see `claude`, `gh` or `node` until it has the
+    // person's own PATH; this comes before anything looks for them.
+    shell_env::adopt_login_path();
 
     let builder = tauri::Builder::default();
     // The voice bar is a floating panel on macOS, so it shows over full-screen apps.
@@ -2377,6 +2406,7 @@ pub fn run() {
             close_project,
             start_session,
             send_turn,
+            read_image,
             list_workers,
             worker_patch,
             worker_verification,
