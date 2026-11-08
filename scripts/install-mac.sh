@@ -30,6 +30,15 @@ if [ -n "$CONDA_PREFIX" ]; then
   export PATH
   unset CONDA_PREFIX CC CXX AR LD CFLAGS CXXFLAGS LDFLAGS
 fi
+# CMake keeps the macOS version it first configured with. A voice engine (whisper.cpp)
+# configured for an older macOS before the minimum was raised fails the same way on
+# every rebuild until Cargo rebuilds it from scratch.
+if grep -Eqs '^CMAKE_OSX_DEPLOYMENT_TARGET:[A-Z]*=10\.(1[0-4]|[0-9])$' \
+  "$ROOT"/app/src-tauri/target/release/build/whisper-rs-sys-*/out/build/CMakeCache.txt; then
+  echo "→ Rebuilding the voice engine, configured earlier for an older macOS"
+  (cd "$ROOT/app/src-tauri" && cargo clean --release -p whisper-rs-sys)
+fi
+
 cd "$ROOT/app"
 npm install --no-audit --no-fund
 npm run tauri build -- --bundles app
