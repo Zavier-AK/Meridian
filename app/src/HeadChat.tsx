@@ -357,17 +357,14 @@ export default function HeadChat({
         <div className="composer-bar">
           <div className="composer-tools">
             <button
-              className="composer-pill"
+              className="composer-pill composer-attach"
               onClick={() => fileRef.current?.click()}
-              title="Attach screenshots or images (or paste, or drop them here)"
-              aria-label="Attach images"
+              title="Add images (or paste or drop them here)"
+              aria-label="Add images"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <rect x="3" y="4" width="18" height="16" rx="3" />
-                <circle cx="9" cy="10" r="1.6" />
-                <path d="M21 16l-5-5-9 9" />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+                <path d="M12 5v14M5 12h14" />
               </svg>
-              Image
             </button>
             <input
               ref={fileRef}
