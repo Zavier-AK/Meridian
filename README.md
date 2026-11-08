@@ -26,9 +26,12 @@ instead of API billing, and local models cost nothing.
 - **Keeps git in view.** The title bar shows the branch and repository you're on. One click
   opens every repository the project spans, with its branches and open pull requests:
   push, switch, clean up merged branches, or hand a pull request to an agent to review.
+  With `gh` signed in, the head agent can look up your repositories, pull requests and
+  issues itself.
 - **You choose how much runs alone.** A slider, from *Ask* (every step waits for you) to
   *Land most* (verified, low-risk changes land by themselves).
-- **Plans and night shifts.** Multi-step work goes on a plan board you approve first. A
+- **Plans and night shifts.** Multi-step work becomes a plan on a board, which runs by
+  itself (or waits for you, with the slider on *Ask*) and can be stopped at any point. A
   night shift runs experiments overnight and keeps only the ones that improve a metric.
 - **Remembers between projects.** A folder of markdown notes (Obsidian works) holds what
   agents learn and how you like to work. Each session gets only a short part of it up
@@ -40,6 +43,8 @@ instead of API billing, and local models cost nothing.
 - **Show it, and see it.** Paste or drop a screenshot into the chat box: the head agent
   sees it and can hand it to a worker. Screenshots the agents take of what they build
   appear in the chat too.
+- **Make it yours.** Pick three colours (a base, an accent and a second accent) or
+  start from a preset, and a typeface. See [look and feel](docs/GUIDE.md#look-and-feel).
 - **Talk to it.** Hold ⌥Space anywhere: "what's waiting for me?", "merge the builder's
   change", "find me a cheaper flight". Web tasks run in their own browser and always ask
   before sending, buying or posting.
@@ -73,9 +78,10 @@ instead of API billing, and local models cost nothing.
 
 ## Getting started
 
-You need Rust, Node 20+, `git`, and `cmake` for voice (`brew install cmake`). Install the
-agent CLIs you want and sign in: `claude` (`claude auth login`), `codex` (`codex login`),
-and optionally Ollama or LM Studio for local models.
+You need a Mac with macOS 11 or later, Rust, Node 20+, `git`, and `cmake` for voice
+(`brew install cmake`). Install the agent CLIs you want and sign in: `claude` (`claude
+auth login`), `codex` (`codex login`), and optionally Ollama or LM Studio for local
+models. For GitHub features, install `gh` and sign in with `gh auth login`.
 
 ```bash
 git clone https://github.com/Zavier-AK/Meridian.git && cd Meridian
@@ -118,6 +124,8 @@ your OpenRouter key and nothing else.
 
 - **[The full guide](docs/GUIDE.md)** — every feature in detail:
   [delegation](docs/GUIDE.md#delegation),
+  [images in the chat](docs/GUIDE.md#showing-it-a-screenshot),
+  [agents' screenshots](docs/GUIDE.md#seeing-what-the-agents-see),
   [verification](docs/GUIDE.md#verification-before-merge),
   [sending work back and pull requests](docs/GUIDE.md#sending-work-back-and-pull-requests),
   [branches and repositories](docs/GUIDE.md#repositories-branches-and-pull-requests),
@@ -128,6 +136,7 @@ your OpenRouter key and nothing else.
   [local models](docs/GUIDE.md#attaching-a-local-model),
   [OpenRouter](docs/GUIDE.md#openrouter),
   [notes](docs/GUIDE.md#notes),
+  [themes](docs/GUIDE.md#look-and-feel),
   [plugins](docs/GUIDE.md#plugins),
   [sign-in problems](docs/GUIDE.md#when-claudes-sign-in-fails).
 - **[Project status](docs/STATUS.md)** — what's verified, what isn't, and what's next.

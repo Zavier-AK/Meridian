@@ -1,6 +1,6 @@
 # Meridian (local-harness) — project status
 
-_Last updated: 3 November 2026_
+_Last updated: 8 November 2026_
 
 ## What this is
 

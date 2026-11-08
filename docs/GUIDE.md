@@ -77,7 +77,7 @@ by a click in the app, so no amount of model output can land code on its own.
 
 ### Showing it a screenshot
 
-Paste an image into the chat box (⌘V), drop one on it, or click **Image** to pick files.
+Paste an image into the chat box (⌘V), drop one on it, or click **+** to pick files.
 Up to six go with a message, shown as thumbnails you can remove before sending.
 
 - **The head agent sees them itself**, in the message.
