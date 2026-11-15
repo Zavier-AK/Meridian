@@ -13,6 +13,7 @@ import ProjectRail, { type AppView } from "./ProjectRail";
 import GitHubView, { BranchIcon, tracking } from "./GitHubView";
 import LimitsPanel from "./LimitsPanel";
 import BudgetMeter from "./BudgetMeter";
+import NeedsYou, { type NeedsYouItem } from "./NeedsYou";
 import PreviewPanel from "./PreviewPanel";
 import ToolsView from "./ToolsView";
 import AutonomyDial, { nextStop } from "./AutonomyDial";
@@ -1008,6 +1009,62 @@ export default function App() {
   }
 
   workersRef.current = workers;
+
+  // Everything waiting on the person, for the title bar's Needs you list.
+  const toChat = () => {
+    setView("session");
+    setActivePane("chat");
+  };
+  const needsYou: NeedsYouItem[] = [
+    ...chat.flatMap((item): NeedsYouItem[] =>
+      item.kind === "permission" && item.state === "waiting"
+        ? [{ key: `ask-${item.requestId}`, kind: "ask" as const, label: `The head agent wants to: ${item.description}`, open: toChat }]
+        : [],
+    ),
+    ...Object.values(workers).flatMap((worker): NeedsYouItem[] => {
+      if (worker.status === "awaiting_approval") {
+        return [{
+          key: `approve-${worker.id}`,
+          kind: "approve" as const,
+          label: `${worker.role}: ${firstLine(worker.task ?? "a delegation")}`,
+          open: () => setSelectedWorker(worker.id),
+        }];
+      }
+      const settled = worker.status === "done" || worker.status === "failed" || worker.status === "cancelled";
+      if (worker.branch && !worker.landed && settled) {
+        const files = worker.diff?.files_changed ?? 0;
+        return [{
+          key: `review-${worker.id}`,
+          kind: "review" as const,
+          label: `${worker.role}'s change, ${files} file${files === 1 ? "" : "s"}`,
+          open: () => setSelectedWorker(worker.id),
+        }];
+      }
+      return [];
+    }),
+    ...(plan?.status === "draft"
+      ? [{
+          key: `plan-${plan.id}`,
+          kind: "plan" as const,
+          label: `Run or edit "${plan.title}"`,
+          open: () => {
+            setView("session");
+            setActivePane("plan");
+          },
+        }]
+      : []),
+    ...(night && night.status !== "running" && !night.proposed_as && night.experiments.some((e) => e.kept)
+      ? [{
+          key: `night-${night.id}`,
+          kind: "night" as const,
+          label: "Its report is ready",
+          open: () => {
+            setView("session");
+            setActivePane("night");
+          },
+        }]
+      : []),
+  ];
   const enabledPlugins = plugins.filter((plugin) => plugin.state === "on");
   const pluginPanels = enabledPlugins.flatMap((plugin) =>
     (plugin.manifest?.panels ?? []).map((panel) => ({ id: `${plugin.key}#${panel.id}`, plugin, panel })),
@@ -1127,6 +1184,7 @@ export default function App() {
           </button>
         )}
         <span className="titlebar-spacer" data-tauri-drag-region />
+        <NeedsYou items={needsYou} />
         <BudgetMeter
           usage={usage}
           rateLimited={rateLimited}

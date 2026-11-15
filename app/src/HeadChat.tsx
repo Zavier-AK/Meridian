@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatItem, PermissionDecision } from "./types";
@@ -6,6 +6,17 @@ import { compactTokens } from "./types";
 import { MeridianMark } from "./Brand";
 import { MAX_IMAGES, imageFiles, prepareImage, type ChatImage } from "./images";
 import AgentShot from "./AgentShot";
+
+const REMARK_PLUGINS = [remarkGfm];
+
+/**
+ * An assistant message, rendered from markdown. Memoized on its text: while a reply
+ * streams, the chat re-renders on every token, and without this every earlier message's
+ * markdown would be parsed again each time.
+ */
+const AssistantMarkdown = memo(function AssistantMarkdown({ text }: { text: string }) {
+  return <Markdown remarkPlugins={REMARK_PLUGINS}>{text}</Markdown>;
+});
 
 type Props = {
   items: ChatItem[];
@@ -207,7 +218,7 @@ export default function HeadChat({
               // stays off — model output is never trusted as markup.
               return (
                 <div key={i} className="bubble assistant markdown">
-                  <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
+                  <AssistantMarkdown text={item.text} />
                 </div>
               );
             case "tool":
