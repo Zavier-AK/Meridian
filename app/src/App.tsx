@@ -1051,7 +1051,7 @@ export default function App() {
           Meridian
         </span>
         <span className="titlebar-project" data-tauri-drag-region title={session.project_root}>
-          {session.project_root.split("/").filter(Boolean).pop() ?? session.project_root}
+          {session.home ? "Home" : session.project_root.split("/").filter(Boolean).pop() ?? session.project_root}
         </span>
         {projectRepo && (
           <button
