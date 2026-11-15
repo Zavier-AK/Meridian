@@ -760,11 +760,21 @@ impl Harness {
 
         self.set_status(&worker_id, WorkerStatus::Running).await;
 
+        // What the notes say that bears on this task travels with it: the worker can't
+        // reach the notes folder, and the head agent may not have thought to pass it on.
+        let mut task_text = task.to_string();
+        if let Some(notes) = self.notes().await {
+            let given = notes.worker_context(task, self.workspaces.project_root());
+            if !given.is_empty() {
+                task_text = format!("{}\n\n{given}", task.trim_end());
+            }
+        }
+
         let spec = WorkerSpec {
             run_id: worker_id.clone(),
             role_name: role_name.clone(),
             role: role.clone(),
-            task: task.to_string(),
+            task: task_text,
             cwd: workspace.cwd.clone(),
             context_files,
             extras: self.extras_snapshot().await,

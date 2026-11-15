@@ -2550,9 +2550,10 @@ async fn conflict_markers_left_behind_are_backed_out_not_landed() {
     let after = finished(&f, &record.id).await;
     assert!(after.is_error);
     assert!(after.summary.contains("backed out"), "{}", after.summary);
-    assert!(!f
-        .harness
-        .workspaces()
-        .merges_cleanly(record.branch.as_deref().unwrap())
-        .await);
+    assert!(
+        !f.harness
+            .workspaces()
+            .merges_cleanly(record.branch.as_deref().unwrap())
+            .await
+    );
 }
