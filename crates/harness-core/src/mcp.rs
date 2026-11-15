@@ -51,6 +51,15 @@ pub struct WorkerIdParams {
     pub worker_id: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReviseParams {
+    /// The finished worker whose change needs another pass.
+    pub worker_id: String,
+    /// What to fix, specifically: the failing check and its output, or what the result
+    /// is missing. The worker sees this and its own earlier work, not this conversation.
+    pub feedback: String,
+}
+
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct CheckParams {
     /// Restrict to these workers. Omit for all of them.
@@ -534,6 +543,41 @@ impl HarnessTools {
     }
 
     #[tool(
+        name = "revise",
+        description = "Send a finished worker's change back to the same worker for another \
+                       pass on its own branch, with what to fix. Use it when its checks \
+                       failed or its result misses something, rather than delegating a fresh \
+                       worker that would start without the change. Its proposed merge is \
+                       withdrawn while it works and proposed (and checked) again after. You \
+                       are sent a notice when it finishes. At most twice per change."
+    )]
+    async fn revise(
+        &self,
+        Parameters(params): Parameters<ReviseParams>,
+    ) -> Json<serde_json::Value> {
+        if self.harness.autonomy().await.delegation_needs_approval() {
+            return Json(serde_json::json!({
+                "error": "the person has the dial on Ask, so changes go back only from them: \
+                          tell them what should change, and they can send it back from its review"
+            }));
+        }
+        match self
+            .harness
+            .revise_from_head(&params.worker_id, &params.feedback)
+            .await
+        {
+            Ok(revision) => Json(serde_json::json!({
+                "worker_id": params.worker_id,
+                "status": "revising",
+                "revision": revision,
+                "note": "Working on it on the same branch. You will be sent a notice when it \
+                         finishes; end your turn rather than waiting."
+            })),
+            Err(err) => Json(serde_json::json!({ "error": format!("{err:#}") })),
+        }
+    }
+
+    #[tool(
         name = "request_merge",
         description = "Propose landing a worker's changes. This does NOT merge: it queues \
                        the diff for the human to review and approve in the app. Say so \
@@ -620,6 +664,7 @@ impl McpServer {
             "check_workers",
             "collect",
             "request_merge",
+            "revise",
             "propose_plan",
             "notes_search",
             "notes_read",

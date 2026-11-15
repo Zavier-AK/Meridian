@@ -266,6 +266,28 @@ impl Harness {
             .latest_orchestrator_backend_session(&key)
     }
 
+    /// Start the head agent's conversation over: the next head agent starts fresh rather
+    /// than resuming, and the chat history starts again from here. Workers, merges and the
+    /// project's notes are untouched; only the conversation goes.
+    pub async fn start_new_conversation(&self) -> Result<()> {
+        let root = self.workspaces.project_root();
+        let key = root
+            .canonicalize()
+            .unwrap_or_else(|_| root.to_path_buf())
+            .display()
+            .to_string();
+        self.store.lock().await.forget_orchestrator_sessions(&key)?;
+        let run_id = self
+            .orchestrator_run
+            .read()
+            .await
+            .clone()
+            .unwrap_or_default();
+        self.record(HarnessEvent::ConversationReset { run_id })
+            .await;
+        Ok(())
+    }
+
     /// Stop a running worker. Returns false if it is not running, or already finished.
     ///
     /// Its process is killed, whatever it had written is committed to its branch so
@@ -654,6 +676,7 @@ impl Harness {
         base: Option<&str>,
     ) -> Result<WorkerRecord> {
         let role_name = self.resolve_role(requested_role).await?;
+        self.check_budget().await?;
         // Cloned out of the lock: the worker runs for minutes and must not hold it.
         let role = self.registry.read().await.get(&role_name)?.clone();
 
@@ -738,11 +761,21 @@ impl Harness {
 
         self.set_status(&worker_id, WorkerStatus::Running).await;
 
+        // What the notes say that bears on this task travels with it: the worker can't
+        // reach the notes folder, and the head agent may not have thought to pass it on.
+        let mut task_text = task.to_string();
+        if let Some(notes) = self.notes().await {
+            let given = notes.worker_context(task, self.workspaces.project_root());
+            if !given.is_empty() {
+                task_text = format!("{}\n\n{given}", task.trim_end());
+            }
+        }
+
         let spec = WorkerSpec {
             run_id: worker_id.clone(),
             role_name: role_name.clone(),
             role: role.clone(),
-            task: task.to_string(),
+            task: task_text,
             cwd: workspace.cwd.clone(),
             context_files,
             extras: self.extras_snapshot().await,
@@ -867,6 +900,38 @@ impl Harness {
         Ok(record)
     }
 
+    /// Fresh tokens this project has spent in the last five hours: input, cache writes and
+    /// output, not cache reads. What `limits.budget_tokens_5h` is measured against.
+    pub async fn fresh_tokens_5h(&self) -> u64 {
+        self.store
+            .lock()
+            .await
+            .usage_window(5 * 60 * 60)
+            .unwrap_or_default()
+            .iter()
+            .map(|p| {
+                p.usage.input_tokens + p.usage.cache_creation_input_tokens + p.usage.output_tokens
+            })
+            .sum()
+    }
+
+    /// Refuse new work once the project's five-hour budget is spent, with a reason the
+    /// head agent can pass on. Work already running finishes.
+    async fn check_budget(&self) -> Result<()> {
+        let Some(budget) = self.registry.read().await.limits.budget_tokens_5h else {
+            return Ok(());
+        };
+        let spent = self.fresh_tokens_5h().await;
+        if spent >= budget {
+            bail!(
+                "this project's budget is spent: {spent} of {budget} tokens in the last five \
+                 hours (limits.budget_tokens_5h). No new workers start until older usage ages \
+                 out of the window, or the person raises the limit under Change fleet › Limits"
+            );
+        }
+        Ok(())
+    }
+
     /// Start a worker and return immediately, so the orchestrator can fan out. The head
     /// agent is told how it ended when it finishes, so it never has to poll.
     pub async fn delegate_async(
@@ -879,6 +944,7 @@ impl Harness {
         // now rather than a worker that mysteriously fails later.
         let resolved = self.resolve_role(role).await?;
         self.registry.read().await.get(&resolved)?;
+        self.check_budget().await?;
 
         // One id from start to finish: the one returned here is the one the worker runs
         // under, so `check_workers`, the rail and the merge gate all agree on it.
@@ -1004,6 +1070,21 @@ impl Harness {
         Ok(restored)
     }
 
+    /// Tidy branches and checkouts earlier runs left behind, keeping every branch this
+    /// session knows: see [`Workspaces::sweep`](crate::isolation::Workspaces::sweep). Undo
+    /// still works for a landing it removed the branch of, since undo reverts the merge
+    /// commit, not the branch.
+    pub async fn sweep(&self) -> Result<(usize, usize)> {
+        let keep: std::collections::HashSet<String> = self
+            .workers()
+            .await
+            .into_iter()
+            .filter_map(|w| w.branch)
+            .chain(self.pending_merges().await.into_iter().map(|(_, b)| b))
+            .collect();
+        self.workspaces.sweep(&keep).await
+    }
+
     /// The session's workers as events, in the order they started: what a window that
     /// opens (or comes back to) a project replays to draw the rail, the reviews waiting
     /// and their checks, without having seen any of it happen.
@@ -1030,6 +1111,26 @@ impl Harness {
                 number: numbers.get(&worker.id).copied().unwrap_or(0),
                 task: worker.task.clone(),
             });
+            // Its saved transcript, the latest lines, so its card shows what it did.
+            let history = self
+                .store
+                .lock()
+                .await
+                .worker_history(&worker.id)
+                .unwrap_or_default();
+            let lines: Vec<HarnessEvent> = history
+                .into_iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        HarnessEvent::ToolCall { .. }
+                            | HarnessEvent::AssistantText { partial: false, .. }
+                            | HarnessEvent::Error { .. }
+                    )
+                })
+                .collect();
+            let skip = lines.len().saturating_sub(SNAPSHOT_TRANSCRIPT_LINES);
+            out.extend(lines.into_iter().skip(skip));
             out.push(HarnessEvent::WorkerStatusChanged {
                 worker_id: worker.id.clone(),
                 status: worker.status,
@@ -1677,7 +1778,14 @@ impl Harness {
                             let worker_id = format!("w-{}", Uuid::new_v4().simple());
                             plan.steps[index].worker_id = Some(worker_id.clone());
                             plan.steps[index].state = StepState::Running;
-                            self.start_step(worker_id, step.input.clone());
+                            // A step that builds on others starts knowing what they did:
+                            // its brief carries their reports and the files they changed.
+                            let mut input = step.input.clone();
+                            let handover = self.handover(&plan, &input.depends_on).await;
+                            if !handover.is_empty() {
+                                input.task = format!("{}\n\n{handover}", input.task.trim_end());
+                            }
+                            self.start_step(worker_id, input);
                         }
                     },
                     Some(worker_id) => {
@@ -1723,6 +1831,95 @@ impl Harness {
             }
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
+    }
+
+    /// What the steps `ids` reported and changed, for a step that builds on them. Empty
+    /// when none of them ran a worker.
+    async fn handover(&self, plan: &crate::plan::Plan, ids: &[String]) -> String {
+        let mut lines = Vec::new();
+        for id in ids {
+            let Some(step) = plan.steps.iter().find(|s| &s.input.id == id) else {
+                continue;
+            };
+            let Some(record) = step.worker_id.as_deref() else {
+                continue;
+            };
+            let Some(record) = self.worker(record).await else {
+                continue;
+            };
+            let report = crate::mcp::clip(record.summary.trim(), HANDOVER_CHARS);
+            let files = record
+                .diff
+                .as_ref()
+                .map(|d| d.files.join(", "))
+                .filter(|f| !f.is_empty())
+                .map(|f| format!("\n  Files it changed (now on your branch): {f}"))
+                .unwrap_or_default();
+            lines.push(format!("- {} ({id}): {report}{files}", step.input.title));
+        }
+        if lines.is_empty() {
+            return String::new();
+        }
+        format!(
+            "This builds on earlier steps of the same plan, which have landed. What they \
+             reported:\n{}",
+            lines.join("\n")
+        )
+    }
+
+    /// Run a failed step of a plan again, with a fresh worker, and put the steps that were
+    /// skipped because of it back in line. The plan picks up again if it had finished.
+    pub async fn retry_step(self: &Arc<Self>, plan_id: &str, step_id: &str) -> Result<()> {
+        use crate::plan::{PlanStatus, StepState};
+        let (plan, restart) = {
+            let mut plans = self.plans.write().await;
+            let plan = plans
+                .get_mut(plan_id)
+                .with_context(|| format!("no plan `{plan_id}`"))?;
+            if !matches!(plan.status, PlanStatus::Running | PlanStatus::Finished) {
+                bail!("the plan isn't running");
+            }
+            let index = plan
+                .steps
+                .iter()
+                .position(|s| s.input.id == step_id)
+                .with_context(|| format!("no step `{step_id}`"))?;
+            if plan.steps[index].state != StepState::Failed {
+                bail!("only a failed step can be retried");
+            }
+            // The step, and everything skipped downstream of it, back to the start.
+            let mut reset = std::collections::HashSet::from([step_id.to_string()]);
+            loop {
+                let before = reset.len();
+                for step in &plan.steps {
+                    if step.state == StepState::Skipped
+                        && step.input.depends_on.iter().any(|d| reset.contains(d))
+                    {
+                        reset.insert(step.input.id.clone());
+                    }
+                }
+                if reset.len() == before {
+                    break;
+                }
+            }
+            for step in plan.steps.iter_mut() {
+                if reset.contains(&step.input.id) {
+                    step.state = StepState::Planned;
+                    step.worker_id = None;
+                    step.note = None;
+                }
+            }
+            let restart = plan.status == PlanStatus::Finished;
+            plan.status = PlanStatus::Running;
+            (plan.clone(), restart)
+        };
+        self.record(HarnessEvent::PlanUpdated { plan }).await;
+        if restart {
+            let harness = Arc::clone(self);
+            let plan_id = plan_id.to_string();
+            tokio::spawn(async move { harness.drive_plan(plan_id).await });
+        }
+        Ok(())
     }
 
     fn start_step(self: &Arc<Self>, worker_id: String, step: crate::plan::StepInput) {
@@ -2236,6 +2433,38 @@ impl Harness {
         if crate::revise::is_empty(note, comments) {
             bail!("say what should change — a comment or a note");
         }
+        self.revise_with(worker_id, crate::revise::feedback(note, comments))
+            .await
+    }
+
+    /// The head agent sends a finished worker's change back, typically after its checks
+    /// failed: the same pass as [`Harness::revise`], briefed as coming from the head
+    /// agent rather than the person, and capped so the two cannot loop forever. Its
+    /// outcome is reported to the head agent when it finishes.
+    pub async fn revise_from_head(
+        self: &Arc<Self>,
+        worker_id: &str,
+        feedback: &str,
+    ) -> Result<u32> {
+        if feedback.trim().is_empty() {
+            bail!("say what should change");
+        }
+        let done = self.revision_count(worker_id).await;
+        if done >= MAX_HEAD_REVISIONS {
+            bail!(
+                "this change has been sent back {done} times already; tell the person what is \
+                 still wrong and let them decide, rather than sending it back again"
+            );
+        }
+        let revision = self
+            .revise_with(worker_id, crate::revise::head_feedback(feedback))
+            .await?;
+        self.approved.write().await.insert(worker_id.to_string());
+        Ok(revision)
+    }
+
+    /// [`Harness::revise`] with the brief already written.
+    async fn revise_with(self: &Arc<Self>, worker_id: &str, feedback: String) -> Result<u32> {
         let record = self
             .worker(worker_id)
             .await
@@ -2276,7 +2505,6 @@ impl Harness {
         self.pending_merges.write().await.remove(worker_id);
         self.verifications.write().await.remove(worker_id);
 
-        let feedback = crate::revise::feedback(note, comments);
         let resume = if role.provider.runs_claude_cli() {
             self.store
                 .lock()
@@ -2307,12 +2535,16 @@ impl Harness {
         })
         .await;
 
+        // A branch that no longer merges with the checkout first takes in what landed
+        // since, so this pass can resolve the conflict rather than add to it.
+        let catch_up = !self.workspaces.merges_cleanly(&branch).await;
+
         let harness = Arc::clone(self);
         let worker_id = worker_id.to_string();
         tokio::spawn(async move {
             harness
                 .run_revision(
-                    worker_id, record, role, branch, task, resume, revision, stopped,
+                    worker_id, record, role, branch, task, resume, revision, stopped, catch_up,
                 )
                 .await;
         });
@@ -2330,6 +2562,7 @@ impl Harness {
         resume: Option<String>,
         revision: u32,
         mut stopped: tokio::sync::watch::Receiver<bool>,
+        catch_up: bool,
     ) {
         let workspace = match self.workspaces.reopen(&worker_id, &branch).await {
             Ok(workspace) => workspace,
@@ -2352,6 +2585,30 @@ impl Harness {
         };
         self.set_status(&worker_id, WorkerStatus::Running).await;
 
+        let mut task = task;
+        let mut conflicts = Vec::new();
+        if catch_up {
+            if let Ok(head) = self.workspaces.head().await {
+                match workspace.merge_in(&head).await {
+                    Ok(files) => conflicts = files,
+                    Err(err) => {
+                        tracing::warn!("could not merge the checkout into {branch}: {err:#}")
+                    }
+                }
+            }
+            if !conflicts.is_empty() {
+                task = format!(
+                    "{}\n\nFirst: the person's branch has changed since you started, and it \
+                     has just been merged into yours. These files have merge conflicts: {}. \
+                     Resolve every conflict marker (<<<<<<<, =======, >>>>>>>), keeping what \
+                     both sides meant, before anything else. Do not commit; that is done for \
+                     you.",
+                    task.trim_end(),
+                    conflicts.join(", ")
+                );
+            }
+        }
+
         let spec = WorkerSpec {
             run_id: worker_id.clone(),
             role_name: record.role.clone(),
@@ -2371,11 +2628,25 @@ impl Harness {
             }
         };
         self.cancels.write().await.remove(&worker_id);
-        let outcome = outcome.unwrap_or_else(|err| agents::RunOutcome {
+        let mut outcome = outcome.unwrap_or_else(|err| agents::RunOutcome {
             text: format!("{err:#}"),
             is_error: true,
             ..Default::default()
         });
+        // Conflict markers left behind would land as text: back the merge out instead, and
+        // say so. The branch keeps everything it had before this pass.
+        if !conflicts.is_empty() && workspace.conflicts_remain(&conflicts) {
+            if let Err(err) = workspace.abort_merge().await {
+                tracing::warn!("could not back out the merge on {branch}: {err:#}");
+            }
+            outcome.is_error = true;
+            outcome.text = format!(
+                "Left merge conflicts unresolved in {}, so the merge was backed out and the \
+                 branch is as it was. {}",
+                conflicts.join(", "),
+                outcome.text
+            );
+        }
 
         let message = if outcome.cancelled {
             format!(
@@ -2689,6 +2960,34 @@ impl Harness {
                 .append_event(&self.session_id, event)
             {
                 tracing::warn!("failed to persist head-agent event: {err}");
+            }
+        }
+
+        // A worker's own transcript, settled lines only, so what it did can still be read
+        // after its card is gone or the app restarts. Tool inputs are trimmed: a `Write`
+        // carries the whole file, and the diff already has it.
+        let worker_line = match event {
+            HarnessEvent::AssistantText {
+                run_id,
+                partial: false,
+                ..
+            }
+            | HarnessEvent::ToolCall { run_id, .. }
+            | HarnessEvent::Error { run_id, .. }
+                if !is_head(run_id) && self.worker(run_id).await.is_some() =>
+            {
+                Some(trim_for_transcript(event))
+            }
+            _ => None,
+        };
+        if let Some(line) = worker_line {
+            if let Err(err) = self
+                .store
+                .lock()
+                .await
+                .append_event(&self.session_id, &line)
+            {
+                tracing::warn!("failed to persist a worker's transcript: {err}");
             }
         }
 
@@ -3017,6 +3316,16 @@ impl Harness {
     }
 }
 
+/// How much of an earlier step's report a dependent step's brief carries.
+const HANDOVER_CHARS: usize = 1_500;
+
+/// A worker's latest transcript lines a snapshot replays onto its card.
+const SNAPSHOT_TRANSCRIPT_LINES: usize = 40;
+
+/// How many times the head agent may send one change back by itself. Past this, what is
+/// still wrong is the person's call.
+const MAX_HEAD_REVISIONS: u32 = 2;
+
 /// How many times checks on one proposed merge are run again because the person's branch
 /// moved while they ran, before it is left for the person instead of landing by itself.
 const MAX_REVERIFY: u32 = 2;
@@ -3076,6 +3385,55 @@ fn restored_record(
         branch: Some(branch.to_string()),
         is_error,
     })
+}
+
+/// An event as a worker's saved transcript keeps it: a tool call's input cut down to the
+/// fields that say what it was for (the file, the command, the pattern), and long text
+/// cut short.
+fn trim_for_transcript(event: &HarnessEvent) -> HarnessEvent {
+    const KEEP: &[&str] = &[
+        "file_path",
+        "path",
+        "command",
+        "pattern",
+        "url",
+        "description",
+    ];
+    const TEXT_CHARS: usize = 4_000;
+    match event {
+        HarnessEvent::ToolCall {
+            run_id,
+            tool_use_id,
+            name,
+            input,
+        } => {
+            let mut kept = serde_json::Map::new();
+            if let Some(fields) = input.as_object() {
+                for key in KEEP {
+                    if let Some(serde_json::Value::String(value)) = fields.get(*key) {
+                        let value: String = value.chars().take(300).collect();
+                        kept.insert((*key).to_string(), serde_json::Value::String(value));
+                    }
+                }
+            }
+            HarnessEvent::ToolCall {
+                run_id: run_id.clone(),
+                tool_use_id: tool_use_id.clone(),
+                name: name.clone(),
+                input: serde_json::Value::Object(kept),
+            }
+        }
+        HarnessEvent::AssistantText {
+            run_id,
+            text,
+            partial,
+        } if text.chars().count() > TEXT_CHARS => HarnessEvent::AssistantText {
+            run_id: run_id.clone(),
+            text: format!("{}…", text.chars().take(TEXT_CHARS).collect::<String>()),
+            partial: *partial,
+        },
+        other => other.clone(),
+    }
 }
 
 /// What a worker stopped by its time limit reports.

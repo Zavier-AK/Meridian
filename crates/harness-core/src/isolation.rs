@@ -214,15 +214,72 @@ impl Workspace {
         }
 
         git(&self.cwd, &["add", "-A"]).await?;
-        if git(&self.cwd, &["diff", "--cached", "--name-only"])
-            .await?
-            .is_empty()
+        // A merge in progress is committed even when the result matches this branch: the
+        // commit is what records that the checkout's changes were taken in.
+        let merging = git(&self.cwd, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+            .await
+            .is_ok();
+        if !merging
+            && git(&self.cwd, &["diff", "--cached", "--name-only"])
+                .await?
+                .is_empty()
         {
             return Ok(false);
         }
 
         git(&self.cwd, &["commit", "--no-verify", "-m", message]).await?;
         Ok(true)
+    }
+
+    /// Merge `rev` (the person's checkout, usually) into this worktree's branch, so the
+    /// worker builds on what has landed since it started. Returns the files left in
+    /// conflict; with none the merge is already committed, and with some it is left in
+    /// progress for the worker to resolve, then [`Workspace::commit`] completes it.
+    pub async fn merge_in(&self, rev: &str) -> Result<Vec<String>> {
+        let merged = git(
+            &self.cwd,
+            &[
+                "-c",
+                "user.name=Meridian",
+                "-c",
+                "user.email=harness@localhost",
+                "merge",
+                "--no-ff",
+                "--no-edit",
+                "--quiet",
+                rev,
+            ],
+        )
+        .await;
+        if merged.is_ok() {
+            return Ok(Vec::new());
+        }
+        let files: Vec<String> = git(&self.cwd, &["diff", "--name-only", "--diff-filter=U"])
+            .await?
+            .lines()
+            .map(str::to_string)
+            .collect();
+        if files.is_empty() {
+            // Failed for another reason than a conflict: leave the branch as it was.
+            let _ = git(&self.cwd, &["merge", "--abort"]).await;
+            merged?;
+        }
+        Ok(files)
+    }
+
+    /// Whether any of `files` still holds a conflict marker.
+    pub fn conflicts_remain(&self, files: &[String]) -> bool {
+        files.iter().any(|file| {
+            std::fs::read_to_string(self.cwd.join(file)).is_ok_and(|text| {
+                text.lines()
+                    .any(|l| l.starts_with("<<<<<<< ") || l.starts_with(">>>>>>> "))
+            })
+        })
+    }
+
+    /// Back out a merge in progress, leaving the branch as it was before it.
+    pub async fn abort_merge(&self) -> Result<()> {
+        git(&self.cwd, &["merge", "--abort"]).await.map(|_| ())
     }
 
     /// Remove the worktree. The branch is left behind so a reviewed diff can still be
@@ -653,6 +710,20 @@ impl Workspaces {
         })
     }
 
+    /// Whether `branch` would merge into the checkout without a conflict, worked out
+    /// without touching any files (`git merge-tree`). Where git can't tell, assume yes.
+    pub async fn merges_cleanly(&self, branch: &str) -> bool {
+        if harness_branch(branch).is_err() {
+            return true;
+        }
+        let out = Command::new("git")
+            .args(["merge-tree", "--write-tree", "HEAD", branch])
+            .current_dir(&self.project_root)
+            .output()
+            .await;
+        !matches!(out, Ok(o) if o.status.code() == Some(1))
+    }
+
     /// The commit the person's checkout is on.
     pub async fn head(&self) -> Result<String> {
         git(&self.project_root, &["rev-parse", "HEAD"]).await
@@ -869,6 +940,61 @@ impl Workspaces {
             .filter(|b| harness_branch(b).is_ok())
             .map(str::to_string)
             .collect())
+    }
+
+    /// Tidy up after earlier runs: delete harness branches whose every commit is already
+    /// in the checkout (they landed, or never changed anything), skipping `keep`, and
+    /// remove verification checkouts left behind for more than a day. Worker worktrees are
+    /// never touched: one left by a crash may hold work nobody has committed.
+    ///
+    /// `git branch -d` refuses a branch that isn't merged or that a worktree has checked
+    /// out, so nothing unmerged or in use can go. Returns how many branches and checkouts
+    /// were removed.
+    pub async fn sweep(&self, keep: &std::collections::HashSet<String>) -> Result<(usize, usize)> {
+        let mut branches = 0;
+        for branch in self.harness_branches().await? {
+            if keep.contains(&branch) || !self.is_merged(&branch).await.unwrap_or(false) {
+                continue;
+            }
+            let _guard = self.git_lock.lock().await;
+            if git(&self.project_root, &["branch", "-d", &branch])
+                .await
+                .is_ok()
+            {
+                branches += 1;
+            }
+        }
+
+        let mut checkouts = 0;
+        let verify = self.project_root.join(VERIFY_DIR);
+        if let Ok(entries) = std::fs::read_dir(&verify) {
+            let day = std::time::Duration::from_secs(24 * 60 * 60);
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let stale = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age > day);
+                if !path.is_dir() || !stale {
+                    continue;
+                }
+                let _guard = self.git_lock.lock().await;
+                let _file_lock = lock_worktree_admin(&self.project_root).await?;
+                let _ = git(
+                    &self.project_root,
+                    &["worktree", "remove", "--force", &path.to_string_lossy()],
+                )
+                .await;
+                if !path.exists() || std::fs::remove_dir_all(&path).is_ok() {
+                    checkouts += 1;
+                }
+            }
+        }
+        // Bookkeeping for worktrees whose folders are already gone.
+        let _ = git(&self.project_root, &["worktree", "prune"]).await;
+        Ok((branches, checkouts))
     }
 
     /// Whether everything on `branch` is already in the current checkout: it landed, or
@@ -1446,6 +1572,99 @@ mod tests {
             workspaces.checkout_branch("w-x", "main").await.is_err(),
             "harness branches only"
         );
+    }
+
+    #[tokio::test]
+    async fn a_branch_that_conflicts_can_take_in_the_checkout_and_be_resolved() {
+        let (dir, workspaces) = scratch_repo().await;
+        tokio::fs::write(dir.path().join("shared.txt"), "base\n")
+            .await
+            .unwrap();
+        git(dir.path(), &["add", "-A"]).await.unwrap();
+        git(dir.path(), &["commit", "-q", "-m", "shared"])
+            .await
+            .unwrap();
+
+        let worker = workspaces
+            .prepare("w-r", Isolation::Worktree)
+            .await
+            .unwrap();
+        tokio::fs::write(worker.cwd.join("shared.txt"), "worker\n")
+            .await
+            .unwrap();
+        worker.commit("worker").await.unwrap();
+        let branch = worker.branch.clone().unwrap();
+        worker.release().await.unwrap();
+        assert!(workspaces.merges_cleanly(&branch).await);
+
+        tokio::fs::write(dir.path().join("shared.txt"), "person\n")
+            .await
+            .unwrap();
+        git(dir.path(), &["commit", "-q", "-am", "person"])
+            .await
+            .unwrap();
+        assert!(!workspaces.merges_cleanly(&branch).await);
+
+        // Unresolved: backed out, the branch as it was.
+        let again = workspaces.reopen("w-r", &branch).await.unwrap();
+        let head = workspaces.head().await.unwrap();
+        let conflicts = again.merge_in(&head).await.unwrap();
+        assert_eq!(conflicts, ["shared.txt"]);
+        assert!(again.conflicts_remain(&conflicts));
+        again.abort_merge().await.unwrap();
+        again.release().await.unwrap();
+        assert!(!workspaces.merges_cleanly(&branch).await);
+
+        // Resolved: the branch now merges cleanly.
+        let again = workspaces.reopen("w-r", &branch).await.unwrap();
+        let conflicts = again.merge_in(&head).await.unwrap();
+        tokio::fs::write(again.cwd.join("shared.txt"), "person and worker\n")
+            .await
+            .unwrap();
+        assert!(!again.conflicts_remain(&conflicts));
+        assert!(again.commit("resolved").await.unwrap());
+        again.release().await.unwrap();
+        assert!(workspaces.merges_cleanly(&branch).await);
+        workspaces.merge(&branch).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("shared.txt")).unwrap(),
+            "person and worker\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn sweeping_drops_only_branches_already_in_the_checkout() {
+        let (dir, workspaces) = scratch_repo().await;
+        // One that changed nothing, one that landed, one waiting, one to keep.
+        let mut made = Vec::new();
+        for (id, write) in [("w-empty", false), ("w-landed", true), ("w-waiting", true)] {
+            let worker = workspaces.prepare(id, Isolation::Worktree).await.unwrap();
+            if write {
+                tokio::fs::write(worker.cwd.join(format!("{id}.txt")), "x\n")
+                    .await
+                    .unwrap();
+                worker.commit(id).await.unwrap();
+            }
+            made.push(worker.branch.clone().unwrap());
+            worker.release().await.unwrap();
+        }
+        workspaces.merge(&made[1]).await.unwrap();
+        let empty_kept = workspaces
+            .prepare("w-kept", Isolation::Worktree)
+            .await
+            .unwrap();
+        let kept = empty_kept.branch.clone().unwrap();
+        empty_kept.release().await.unwrap();
+
+        let keep = std::collections::HashSet::from([kept.clone()]);
+        let (branches, _) = workspaces.sweep(&keep).await.unwrap();
+        assert_eq!(branches, 2);
+        let left = workspaces.harness_branches().await.unwrap();
+        assert!(left.contains(&made[2]), "unmerged work stays");
+        assert!(left.contains(&kept), "a branch in use stays");
+        assert!(!left.contains(&made[0]) && !left.contains(&made[1]));
+        // The landed work is still in the checkout, of course.
+        assert!(dir.path().join("w-landed.txt").exists());
     }
 
     #[tokio::test]

@@ -23,6 +23,17 @@ pub struct ReviewComment {
 const EXCERPT_CHARS: usize = 160;
 
 /// What the worker is told. `note` is the person's overall message, if any.
+/// What a worker is told when the head agent, not the person, sends its change back:
+/// usually because its checks failed.
+pub fn head_feedback(feedback: &str) -> String {
+    format!(
+        "Your change needs another pass before the person reviews it. Your earlier work is \
+         already committed on this branch: build on it rather than starting again, and fix \
+         only what is asked.\n\nWhat to fix:\n{}",
+        feedback.trim()
+    )
+}
+
 pub fn feedback(note: &str, comments: &[ReviewComment]) -> String {
     let mut out = String::from(
         "The person reviewed your change and wants another pass. Your earlier work is \

@@ -345,6 +345,11 @@ pub struct Limits {
     /// Minutes a worker may run before it is stopped, what it wrote kept on its branch.
     #[serde(default = "default_worker_timeout_mins")]
     pub worker_timeout_mins: u64,
+    /// Fresh tokens (input, cache writes and output; cache reads, which cost a tenth, not
+    /// counted) this project may spend in any five hours before new work is refused.
+    /// `None` is no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens_5h: Option<u64>,
 }
 
 fn default_max_parallel_workers() -> usize {
@@ -360,6 +365,7 @@ impl Default for Limits {
         Self {
             max_parallel_workers: default_max_parallel_workers(),
             worker_timeout_mins: default_worker_timeout_mins(),
+            budget_tokens_5h: None,
         }
     }
 }
@@ -408,6 +414,9 @@ impl RoleRegistry {
         }
         if self.limits.worker_timeout_mins == 0 {
             bail!("limits.worker_timeout_mins must be greater than zero");
+        }
+        if self.limits.budget_tokens_5h == Some(0) {
+            bail!("limits.budget_tokens_5h must be greater than zero, or left out for no limit");
         }
 
         for (name, role) in &self.roles {
