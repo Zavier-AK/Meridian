@@ -1890,3 +1890,5 @@ button.shot-lightbox-close {
 /* A failed plan step's card, with Retry under it. */
 .lane-card-wrap { display: flex; flex-direction: column; gap: 4px; }
 .lane-retry { align-self: flex-start; font-size: 12px; padding: 3px 10px; }
+
+.check-resolve { margin-top: 6px; font-size: 12px; padding: 4px 10px; }

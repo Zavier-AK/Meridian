@@ -2491,3 +2491,68 @@ async fn a_failed_step_can_be_retried_and_the_next_step_hears_what_it_did() {
         b.task
     );
 }
+
+#[tokio::test]
+async fn sending_back_a_change_that_conflicts_resolves_it_against_the_checkout() {
+    let mut f = fixture_with(&passing_verify()).await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:README.md:from the worker", vec![])
+        .await
+        .unwrap();
+    std::fs::write(f.root.join("README.md"), "from the person\n").unwrap();
+    git(&f.root, &["commit", "-q", "-am", "edit"]).await;
+    f.harness.request_merge(&record.id).await.unwrap();
+    let (_, report) = verification_of(&mut f, &record.id).await;
+    assert!(report.checks.iter().any(|c| c.name == "Merge"));
+
+    // The pass that resolves it: the worker writes both sides into the file.
+    f.harness
+        .revise(
+            &record.id,
+            "resolve it MOCK-SH:printf 'from the person and the worker\\n' > README.md",
+            &[],
+        )
+        .await
+        .unwrap();
+    let after = finished(&f, &record.id).await;
+    assert!(!after.is_error, "{}", after.summary);
+    let (_, report) = verification_of(&mut f, &record.id).await;
+    assert!(
+        !report.checks.iter().any(|c| c.name == "Merge"),
+        "it merges cleanly now: {report:?}"
+    );
+    f.harness.approve_merge(&record.id).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("README.md")).unwrap(),
+        "from the person and the worker\n"
+    );
+}
+
+#[tokio::test]
+async fn conflict_markers_left_behind_are_backed_out_not_landed() {
+    let mut f = fixture_with(&passing_verify()).await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:README.md:from the worker", vec![])
+        .await
+        .unwrap();
+    std::fs::write(f.root.join("README.md"), "from the person\n").unwrap();
+    git(&f.root, &["commit", "-q", "-am", "edit"]).await;
+    f.harness.request_merge(&record.id).await.unwrap();
+    verification_of(&mut f, &record.id).await;
+
+    // A pass that ignores the conflict.
+    f.harness
+        .revise(&record.id, "MOCK-SH:echo unrelated > other.txt", &[])
+        .await
+        .unwrap();
+    let after = finished(&f, &record.id).await;
+    assert!(after.is_error);
+    assert!(after.summary.contains("backed out"), "{}", after.summary);
+    assert!(!f
+        .harness
+        .workspaces()
+        .merges_cleanly(record.branch.as_deref().unwrap())
+        .await);
+}

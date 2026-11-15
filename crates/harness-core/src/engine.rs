@@ -2491,12 +2491,16 @@ impl Harness {
         })
         .await;
 
+        // A branch that no longer merges with the checkout first takes in what landed
+        // since, so this pass can resolve the conflict rather than add to it.
+        let catch_up = !self.workspaces.merges_cleanly(&branch).await;
+
         let harness = Arc::clone(self);
         let worker_id = worker_id.to_string();
         tokio::spawn(async move {
             harness
                 .run_revision(
-                    worker_id, record, role, branch, task, resume, revision, stopped,
+                    worker_id, record, role, branch, task, resume, revision, stopped, catch_up,
                 )
                 .await;
         });
@@ -2514,6 +2518,7 @@ impl Harness {
         resume: Option<String>,
         revision: u32,
         mut stopped: tokio::sync::watch::Receiver<bool>,
+        catch_up: bool,
     ) {
         let workspace = match self.workspaces.reopen(&worker_id, &branch).await {
             Ok(workspace) => workspace,
@@ -2536,6 +2541,30 @@ impl Harness {
         };
         self.set_status(&worker_id, WorkerStatus::Running).await;
 
+        let mut task = task;
+        let mut conflicts = Vec::new();
+        if catch_up {
+            if let Ok(head) = self.workspaces.head().await {
+                match workspace.merge_in(&head).await {
+                    Ok(files) => conflicts = files,
+                    Err(err) => {
+                        tracing::warn!("could not merge the checkout into {branch}: {err:#}")
+                    }
+                }
+            }
+            if !conflicts.is_empty() {
+                task = format!(
+                    "{}\n\nFirst: the person's branch has changed since you started, and it \
+                     has just been merged into yours. These files have merge conflicts: {}. \
+                     Resolve every conflict marker (<<<<<<<, =======, >>>>>>>), keeping what \
+                     both sides meant, before anything else. Do not commit; that is done for \
+                     you.",
+                    task.trim_end(),
+                    conflicts.join(", ")
+                );
+            }
+        }
+
         let spec = WorkerSpec {
             run_id: worker_id.clone(),
             role_name: record.role.clone(),
@@ -2555,11 +2584,25 @@ impl Harness {
             }
         };
         self.cancels.write().await.remove(&worker_id);
-        let outcome = outcome.unwrap_or_else(|err| agents::RunOutcome {
+        let mut outcome = outcome.unwrap_or_else(|err| agents::RunOutcome {
             text: format!("{err:#}"),
             is_error: true,
             ..Default::default()
         });
+        // Conflict markers left behind would land as text: back the merge out instead, and
+        // say so. The branch keeps everything it had before this pass.
+        if !conflicts.is_empty() && workspace.conflicts_remain(&conflicts) {
+            if let Err(err) = workspace.abort_merge().await {
+                tracing::warn!("could not back out the merge on {branch}: {err:#}");
+            }
+            outcome.is_error = true;
+            outcome.text = format!(
+                "Left merge conflicts unresolved in {}, so the merge was backed out and the \
+                 branch is as it was. {}",
+                conflicts.join(", "),
+                outcome.text
+            );
+        }
 
         let message = if outcome.cancelled {
             format!(
