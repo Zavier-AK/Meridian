@@ -705,6 +705,20 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy, queued]);
 
+  /** A fresh conversation with the head agent: the long one stops costing context. */
+  async function newConversation() {
+    if (!window.confirm("Start a new conversation? The head agent forgets this one. Workers, reviews waiting and notes stay as they are.")) return;
+    try {
+      await invoke("new_conversation");
+      headRun.current = null;
+      setHeadPrompt(null);
+      setQueued([]);
+      setChat([{ kind: "notice", tone: "info", text: "New conversation. Workers and reviews carry on as before." }]);
+    } catch (err) {
+      setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]);
+    }
+  }
+
   // App-wide shortcuts. Esc in the composer is handled there, where focus usually is;
   // this covers Esc from anywhere else, and project navigation.
   useEffect(() => {
@@ -1246,6 +1260,16 @@ export default function App() {
                   {entry.panel.title}
                 </button>
               ))}
+              {activePane === "chat" && chat.some((item) => item.kind === "user" || item.kind === "assistant") && (
+                <button
+                  className="new-conversation"
+                  onClick={() => void newConversation()}
+                  disabled={busy}
+                  title="Start over with a fresh conversation. Workers, reviews and notes stay as they are."
+                >
+                  New conversation
+                </button>
+              )}
             </nav>
             {openPanel && (
               <div className="tab-panel plugin-panel" role="tabpanel">
@@ -2026,6 +2050,10 @@ function historyToChat(events: HarnessEvent[]): ChatItem[] {
         break;
       case "head_notice":
         items.push({ kind: "notice", tone: "info", text: noticeLine(event.text) });
+        break;
+      case "conversation_reset":
+        // Only what came after the last new conversation is this conversation.
+        items = [];
         break;
       case "assistant_text":
         if (!event.partial) items.push({ kind: "assistant", text: event.text });

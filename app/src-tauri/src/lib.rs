@@ -1560,6 +1560,27 @@ async fn reconnect_head(
     relaunch_head(&app, &key, session).await
 }
 
+/// Start the head agent's conversation over: a fresh one, which a restart won't undo.
+/// Workers, reviews waiting and notes stay as they are.
+#[tauri::command]
+async fn new_conversation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<(), String> {
+    let key = key_for(&state, project).await?;
+    let mut projects = state.projects.lock().await;
+    let session = projects
+        .get_mut(&key)
+        .ok_or("no session for that project")?;
+    session
+        .harness
+        .start_new_conversation()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    relaunch_head(&app, &key, session).await
+}
+
 /// Shut the head agent down if it is up, and start it again on the same conversation.
 async fn relaunch_head(app: &AppHandle, key: &str, session: &mut Session) -> Result<(), String> {
     if let Head::Live(orchestrator) = std::mem::replace(&mut session.head, Head::Suspended) {
@@ -2491,6 +2512,7 @@ pub fn run() {
             make_first_commit,
             open_home,
             worker_snapshot,
+            new_conversation,
             answer_permission,
             revise_worker,
             changes_overview,

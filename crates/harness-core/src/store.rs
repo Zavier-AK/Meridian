@@ -283,7 +283,7 @@ impl Store {
              JOIN sessions ON sessions.id = events.session_id \
              WHERE sessions.project_root = ?1 \
                AND json_extract(events.payload, '$.type') IN \
-                   ('user_message', 'head_notice', 'assistant_text', 'tool_call', 'turn_interrupted', 'run_finished', 'error') \
+                   ('conversation_reset', 'user_message', 'head_notice', 'assistant_text', 'tool_call', 'turn_interrupted', 'run_finished', 'error') \
              ORDER BY events.id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_root, limit as i64], |row| {
@@ -296,6 +296,18 @@ impl Store {
         }
         out.reverse();
         Ok(out)
+    }
+
+    /// Forget which backend conversations this project's head agent could resume, so the
+    /// next start is a fresh conversation, and a restart can't bring the old one back.
+    pub fn forget_orchestrator_sessions(&self, project_root: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE runs SET backend_session_id = NULL
+             WHERE role = 'orchestrator'
+               AND session_id IN (SELECT id FROM sessions WHERE project_root = ?1)",
+            params![project_root],
+        )?;
+        Ok(())
     }
 
     /// Everything recorded about one worker, from whichever session ran it, oldest
@@ -483,6 +495,20 @@ mod tests {
                 .latest_orchestrator_backend_session("/tmp/other")
                 .unwrap(),
             None
+        );
+
+        // A new conversation: nothing of the head's is resumable any more, and a worker's
+        // conversation (kept for sending its change back) is left alone.
+        store.forget_orchestrator_sessions("/tmp/project").unwrap();
+        assert_eq!(
+            store
+                .latest_orchestrator_backend_session("/tmp/project")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store.backend_session_id("worker").unwrap(),
+            Some("worker-session".into())
         );
     }
 }

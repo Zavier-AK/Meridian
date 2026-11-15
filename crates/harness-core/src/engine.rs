@@ -266,6 +266,28 @@ impl Harness {
             .latest_orchestrator_backend_session(&key)
     }
 
+    /// Start the head agent's conversation over: the next head agent starts fresh rather
+    /// than resuming, and the chat history starts again from here. Workers, merges and the
+    /// project's notes are untouched; only the conversation goes.
+    pub async fn start_new_conversation(&self) -> Result<()> {
+        let root = self.workspaces.project_root();
+        let key = root
+            .canonicalize()
+            .unwrap_or_else(|_| root.to_path_buf())
+            .display()
+            .to_string();
+        self.store.lock().await.forget_orchestrator_sessions(&key)?;
+        let run_id = self
+            .orchestrator_run
+            .read()
+            .await
+            .clone()
+            .unwrap_or_default();
+        self.record(HarnessEvent::ConversationReset { run_id })
+            .await;
+        Ok(())
+    }
+
     /// Stop a running worker. Returns false if it is not running, or already finished.
     ///
     /// Its process is killed, whatever it had written is committed to its branch so
