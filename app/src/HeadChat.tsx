@@ -38,6 +38,9 @@ type Props = {
   mic?: React.ReactNode;
   /** In the home chat, the welcome says so rather than talking about a project. */
   home?: boolean;
+  /** Messages typed while the head agent works, waiting to go when it finishes. */
+  queued?: string[];
+  onUnqueue?: (index: number) => void;
 };
 
 /** Tool calls into the harness read as delegation, not as plumbing. */
@@ -81,6 +84,8 @@ export default function HeadChat({
   promptTokens,
   mic,
   home,
+  queued = [],
+  onUnqueue,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [images, setImages] = useState<ChatImage[]>([]);
@@ -151,7 +156,8 @@ export default function HeadChat({
 
   function submit() {
     const text = draft.trim();
-    if ((!text && images.length === 0) || busy) return;
+    // While it works the message waits in the queue below, rather than being refused.
+    if (!text && images.length === 0) return;
     onSend(text, images);
     setDraft("");
     setImages([]);
@@ -337,6 +343,24 @@ export default function HeadChat({
           </div>
         )}
         {imageError && <p className="composer-image-error">{imageError}</p>}
+        {queued.length > 0 && (
+          <ul className="queued" aria-label="Queued messages">
+            {queued.map((text, i) => (
+              <li key={i} className="queued-item">
+                <span className="queued-label">Queued</span>
+                <span className="queued-text">{text}</span>
+                <button
+                  className="queued-remove"
+                  onClick={() => onUnqueue?.(i)}
+                  aria-label="Remove this queued message"
+                  title="Don't send this"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={inputRef}
           value={draft}
@@ -358,7 +382,9 @@ export default function HeadChat({
               onStop();
             }
           }}
-          placeholder={busy ? "Working… (Esc to stop)" : "What should we build?"}
+          placeholder={
+            busy ? "Working… type to queue the next message, or Esc to stop" : "What should we build?"
+          }
           rows={2}
         />
         <div className="composer-bar">

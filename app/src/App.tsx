@@ -66,6 +66,10 @@ export default function App() {
   const [rateLimited, setRateLimited] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Messages typed while the head agent was working, sent together when it finishes. */
+  const [queued, setQueued] = useState<{ text: string; shown: string; images: ChatImage[] }[]>([]);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
   const [activePane, setActivePane] = useState<"chat" | "plan" | "night" | "preview" | "flow" | "plugin">("chat");
   // What moved between you, the head agent and the workers, newest first.
   const [flows, setFlows] = useState<Flow[]>([]);
@@ -670,6 +674,12 @@ export default function App() {
 
   /** `shown` is how it reads in the chat, when that differs — a 🎙 for what was said. */
   async function send(text: string, shown: string = text, images: ChatImage[] = []) {
+    // While the head agent is mid-turn, hold the message and send it when the turn ends,
+    // so the person can keep typing instead of waiting.
+    if (busyRef.current) {
+      setQueued((prev) => [...prev, { text, shown, images }]);
+      return;
+    }
     setChat((prev) => [...prev, { kind: "user", text: shown, images: images.map((i) => i.preview) }]);
     setBusy(true);
     try {
@@ -682,6 +692,18 @@ export default function App() {
       setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]);
     }
   }
+
+  // The turn ended: what was typed meanwhile goes now, as one message in the order written.
+  useEffect(() => {
+    if (busy || queued.length === 0) return;
+    const batch = queued;
+    setQueued([]);
+    const text = batch.map((m) => m.text).join("\n\n");
+    const shown = batch.map((m) => m.shown).join("\n\n");
+    void send(text, shown, batch.flatMap((m) => m.images));
+    // `send` reads state through refs; it is safe to leave out.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, queued]);
 
   // App-wide shortcuts. Esc in the composer is handled there, where focus usually is;
   // this covers Esc from anywhere else, and project navigation.
@@ -1279,6 +1301,8 @@ export default function App() {
                 onPermission={(id, decision) => void answerPermission(id, decision)}
                 model={headModel}
                 home={session.home}
+                queued={queued.map((m) => m.shown || (m.images.length ? `${m.images.length} image(s)` : ""))}
+                onUnqueue={(index) => setQueued((prev) => prev.filter((_, i) => i !== index))}
                 promptTokens={headPrompt}
                 tools={
                   <>
