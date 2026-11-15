@@ -9,10 +9,14 @@ nothing touches your code until you've reviewed it. Every agent is the vendor's 
 `claude`, `codex` — or a local model, so the work runs on Claude and ChatGPT subscriptions
 instead of API billing, and local models cost nothing.
 
-![The chat with the head agent, workers running on the right](docs/screenshots/chat.png)
+![Meridian's home chat: a request, the head agent's reply, Meridian's notice that the worker finished, and its change waiting for review](docs/screenshots/home.png)
 
 ## What it does
 
+![The chat with the head agent, workers running on the right](docs/screenshots/chat.png)
+
+- **Opens straight into a chat.** No folder to pick first: Meridian starts in its own
+  home folder, ready to type into. Ask anything there, or open a project from the sidebar.
 - **Delegates in parallel.** Ask for a change; the head agent splits it up and hands the
   pieces to workers — builders, testers, reviewers — each in its own worktree on its own
   branch. Claude, Codex and local models (Ollama, LM Studio) can all be workers, and so can

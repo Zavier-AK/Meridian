@@ -1,0 +1,232 @@
+/* Meridian's Ember theme mapped to the kit's tokens: a near-black base, an orange
+   accent and an amber second accent. Every rule is scoped to this example. */
+.mh {
+  & .ss-stage {
+    --gutter: 40px;
+    --ss-accent: #ff7a1a;
+    --ss-accent-2: #ffc43d;
+    --ss-accent-soft: color-mix(in srgb, #ff7a1a 16%, transparent);
+    --ss-canvas: #141317;
+    --ss-surface: #19181c;
+    --ss-chrome: #19181c;
+    --ss-raised: #232127;
+    --ss-text-strong: #f4f1ec;
+    --ss-text: #b9b3ab;
+    --ss-text-faint: #8a847d;
+    overflow: hidden;
+    border-radius: 18px;
+    /* The card the window sits in: the base, lit by the two accents. */
+    background:
+      radial-gradient(120% 90% at 100% 100%, color-mix(in srgb, #ff7a1a 22%, transparent), transparent 60%),
+      radial-gradient(80% 70% at 0% 0%, color-mix(in srgb, #ffc43d 9%, transparent), transparent 55%),
+      #0c0c0e;
+  }
+
+  /* Pinned top-left; runs off the right and bottom so it reads as an app, not a
+     screenshot pasted in. */
+  .mh-window {
+    position: absolute;
+    top: var(--gutter);
+    left: var(--gutter);
+    width: 1000px;
+    height: 620px;
+    border-radius: 12px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 30px 70px -20px rgba(0, 0, 0, 0.7);
+  }
+
+  .mh-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding-top: 44px;
+  }
+
+  .mh-tile {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+  }
+
+  .mh-tile--home {
+    color: var(--ss-accent);
+    background: var(--ss-accent-soft);
+    box-shadow: 0 0 0 2px var(--ss-accent);
+  }
+
+  /* The composer sits at the foot of the visible window, as it does in the app. */
+  .mh-chat {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    /* The window runs 120px past the stage's foot; the composer stays in view. */
+    padding: 18px 28px 158px;
+  }
+
+  .mh-thread {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 18px;
+    max-width: 470px;
+  }
+
+  .mh-past {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    opacity: 0.7;
+  }
+
+  .mh-past-q { align-self: flex-end; }
+
+  .mh-you {
+    align-self: flex-end;
+    max-width: 340px;
+    padding: 10px 14px;
+    border-radius: 16px 16px 4px 16px;
+    font-size: 14px;
+    line-height: 1.45;
+    color: #1a0e05;
+    background: linear-gradient(135deg, var(--ss-accent), var(--ss-accent-2));
+  }
+
+  .mh-head {
+    max-width: 470px;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--ss-text-strong);
+  }
+
+  /* Meridian's own line in the chat: small, quiet, never a bubble of yours. */
+  .mh-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--ss-text);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    align-self: flex-start;
+  }
+
+  .mh-notice .mh-mark {
+    flex: none;
+    margin-top: 1px;
+    color: var(--ss-accent);
+  }
+
+  .mh-composer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 22px;
+    max-width: 470px;
+    padding: 8px 8px 8px 8px;
+    border-radius: 14px;
+    background: var(--ss-raised);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .mh-plus,
+  .mh-send {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+  }
+
+  .mh-plus {
+    color: var(--ss-text);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .mh-send {
+    color: #1a0e05;
+    background: linear-gradient(135deg, var(--ss-accent), var(--ss-accent-2));
+  }
+
+  .mh-placeholder {
+    flex: 1;
+    font-size: 13.5px;
+    color: var(--ss-text-faint);
+  }
+
+  /* The payoff: the change waiting for you, straddling the window's right edge. */
+  .mh-review {
+    position: absolute;
+    right: var(--gutter);
+    bottom: 64px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 304px;
+    padding: 16px;
+    border-radius: 14px;
+    background: var(--ss-raised);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 24px 50px -12px rgba(0, 0, 0, 0.75);
+  }
+
+  .mh-review-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .mh-review-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ss-text-strong);
+  }
+
+  /* A file row on the card's own left edge, between hairlines. */
+  .mh-file {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .mh-file-name {
+    font-family: var(--ss-mono);
+    font-size: 12.5px;
+    color: var(--ss-text-strong);
+  }
+
+  .mh-file-stat {
+    font-family: var(--ss-mono);
+    font-size: 12px;
+    color: var(--ss-success);
+  }
+
+  .mh-diff {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .mh-review-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mh-review-actions .ss-button[data-variant="primary"],
+  .mh-review-actions .mh-merge {
+    color: #1a0e05;
+    background: linear-gradient(135deg, var(--ss-accent), var(--ss-accent-2));
+  }
+}
