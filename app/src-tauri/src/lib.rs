@@ -739,6 +739,14 @@ async fn start_session(
         Ok(n) => tracing::info!("restored {n} worker(s) from earlier sessions"),
         Err(error) => tracing::warn!("could not restore earlier workers: {error:#}"),
     }
+    // Then tidy what earlier runs left: branches already in the checkout, old checkouts.
+    match harness.sweep().await {
+        Ok((0, 0)) => {}
+        Ok((branches, checkouts)) => {
+            tracing::info!("tidied {branches} merged branch(es) and {checkouts} old checkout(s)")
+        }
+        Err(error) => tracing::warn!("could not tidy old branches: {error:#}"),
+    }
     harness.set_notes(settings::load().notes.notes()).await;
     harness
         .set_autonomy(harness_core::autonomy::load(&project))

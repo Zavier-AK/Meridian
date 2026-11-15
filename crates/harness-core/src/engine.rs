@@ -1026,6 +1026,21 @@ impl Harness {
         Ok(restored)
     }
 
+    /// Tidy branches and checkouts earlier runs left behind, keeping every branch this
+    /// session knows: see [`Workspaces::sweep`](crate::isolation::Workspaces::sweep). Undo
+    /// still works for a landing it removed the branch of, since undo reverts the merge
+    /// commit, not the branch.
+    pub async fn sweep(&self) -> Result<(usize, usize)> {
+        let keep: std::collections::HashSet<String> = self
+            .workers()
+            .await
+            .into_iter()
+            .filter_map(|w| w.branch)
+            .chain(self.pending_merges().await.into_iter().map(|(_, b)| b))
+            .collect();
+        self.workspaces.sweep(&keep).await
+    }
+
     /// The session's workers as events, in the order they started: what a window that
     /// opens (or comes back to) a project replays to draw the rail, the reviews waiting
     /// and their checks, without having seen any of it happen.
@@ -1052,6 +1067,26 @@ impl Harness {
                 number: numbers.get(&worker.id).copied().unwrap_or(0),
                 task: worker.task.clone(),
             });
+            // Its saved transcript, the latest lines, so its card shows what it did.
+            let history = self
+                .store
+                .lock()
+                .await
+                .worker_history(&worker.id)
+                .unwrap_or_default();
+            let lines: Vec<HarnessEvent> = history
+                .into_iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        HarnessEvent::ToolCall { .. }
+                            | HarnessEvent::AssistantText { partial: false, .. }
+                            | HarnessEvent::Error { .. }
+                    )
+                })
+                .collect();
+            let skip = lines.len().saturating_sub(SNAPSHOT_TRANSCRIPT_LINES);
+            out.extend(lines.into_iter().skip(skip));
             out.push(HarnessEvent::WorkerStatusChanged {
                 worker_id: worker.id.clone(),
                 status: worker.status,
@@ -2745,6 +2780,34 @@ impl Harness {
             }
         }
 
+        // A worker's own transcript, settled lines only, so what it did can still be read
+        // after its card is gone or the app restarts. Tool inputs are trimmed: a `Write`
+        // carries the whole file, and the diff already has it.
+        let worker_line = match event {
+            HarnessEvent::AssistantText {
+                run_id,
+                partial: false,
+                ..
+            }
+            | HarnessEvent::ToolCall { run_id, .. }
+            | HarnessEvent::Error { run_id, .. }
+                if !is_head(run_id) && self.worker(run_id).await.is_some() =>
+            {
+                Some(trim_for_transcript(event))
+            }
+            _ => None,
+        };
+        if let Some(line) = worker_line {
+            if let Err(err) = self
+                .store
+                .lock()
+                .await
+                .append_event(&self.session_id, &line)
+            {
+                tracing::warn!("failed to persist a worker's transcript: {err}");
+            }
+        }
+
         match event {
             HarnessEvent::SessionStarted {
                 run_id,
@@ -3070,6 +3133,9 @@ impl Harness {
     }
 }
 
+/// A worker's latest transcript lines a snapshot replays onto its card.
+const SNAPSHOT_TRANSCRIPT_LINES: usize = 40;
+
 /// How many times the head agent may send one change back by itself. Past this, what is
 /// still wrong is the person's call.
 const MAX_HEAD_REVISIONS: u32 = 2;
@@ -3133,6 +3199,55 @@ fn restored_record(
         branch: Some(branch.to_string()),
         is_error,
     })
+}
+
+/// An event as a worker's saved transcript keeps it: a tool call's input cut down to the
+/// fields that say what it was for (the file, the command, the pattern), and long text
+/// cut short.
+fn trim_for_transcript(event: &HarnessEvent) -> HarnessEvent {
+    const KEEP: &[&str] = &[
+        "file_path",
+        "path",
+        "command",
+        "pattern",
+        "url",
+        "description",
+    ];
+    const TEXT_CHARS: usize = 4_000;
+    match event {
+        HarnessEvent::ToolCall {
+            run_id,
+            tool_use_id,
+            name,
+            input,
+        } => {
+            let mut kept = serde_json::Map::new();
+            if let Some(fields) = input.as_object() {
+                for key in KEEP {
+                    if let Some(serde_json::Value::String(value)) = fields.get(*key) {
+                        let value: String = value.chars().take(300).collect();
+                        kept.insert((*key).to_string(), serde_json::Value::String(value));
+                    }
+                }
+            }
+            HarnessEvent::ToolCall {
+                run_id: run_id.clone(),
+                tool_use_id: tool_use_id.clone(),
+                name: name.clone(),
+                input: serde_json::Value::Object(kept),
+            }
+        }
+        HarnessEvent::AssistantText {
+            run_id,
+            text,
+            partial,
+        } if text.chars().count() > TEXT_CHARS => HarnessEvent::AssistantText {
+            run_id: run_id.clone(),
+            text: format!("{}…", text.chars().take(TEXT_CHARS).collect::<String>()),
+            partial: *partial,
+        },
+        other => other.clone(),
+    }
 }
 
 /// What a worker stopped by its time limit reports.

@@ -2406,3 +2406,37 @@ async fn the_head_agent_can_send_a_change_back_twice_and_hears_how_it_went() {
         .unwrap_err();
     assert!(err.to_string().contains("sent back 2 times"), "{err}");
 }
+
+#[tokio::test]
+async fn a_workers_transcript_is_kept_trimmed_and_replayed() {
+    let mut f = fixture().await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:a.txt:one", vec![])
+        .await
+        .unwrap();
+    // The app passes every event through `note_event`; do the same here.
+    for event in drain(&mut f.events) {
+        f.harness.note_event(&event).await;
+    }
+    let big = HarnessEvent::ToolCall {
+        run_id: record.id.clone(),
+        tool_use_id: "t9".into(),
+        name: "Write".into(),
+        input: serde_json::json!({ "file_path": "big.txt", "content": "x".repeat(20_000) }),
+    };
+    f.harness.note_event(&big).await;
+
+    let snapshot = f.harness.snapshot_events().await;
+    let calls: Vec<&serde_json::Value> = snapshot
+        .iter()
+        .filter_map(|e| match e {
+            HarnessEvent::ToolCall { run_id, input, .. } if run_id == &record.id => Some(input),
+            _ => None,
+        })
+        .collect();
+    assert!(!calls.is_empty(), "the worker's tool calls come back");
+    let last = calls.last().unwrap();
+    assert_eq!(last["file_path"], "big.txt", "what it was for is kept");
+    assert!(last.get("content").is_none(), "the file itself is not");
+}
