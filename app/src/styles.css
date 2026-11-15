@@ -1886,3 +1886,7 @@ button.shot-lightbox-close {
 .checks-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .checks-row input { width: 110px; }
 .checks-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+
+/* A failed plan step's card, with Retry under it. */
+.lane-card-wrap { display: flex; flex-direction: column; gap: 4px; }
+.lane-retry { align-self: flex-start; font-size: 12px; padding: 3px 10px; }

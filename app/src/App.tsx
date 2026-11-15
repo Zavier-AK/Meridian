@@ -1368,6 +1368,12 @@ export default function App() {
                 onRun={(steps) => void runPlan(steps)}
                 onFeedback={(steps, comments, note) => void sendPlanFeedback(steps, comments, note)}
                 onDiscard={() => void discardPlan()}
+                onRetry={(stepId) => {
+                  if (!plan) return;
+                  void invoke("retry_plan_step", { planId: plan.id, stepId }).catch((err) =>
+                    setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]),
+                  );
+                }}
                 onSelectWorker={setSelectedWorker}
               />
             </div>

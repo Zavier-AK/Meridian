@@ -2440,3 +2440,54 @@ async fn a_workers_transcript_is_kept_trimmed_and_replayed() {
     assert_eq!(last["file_path"], "big.txt", "what it was for is kept");
     assert!(last.get("content").is_none(), "the file itself is not");
 }
+
+#[tokio::test]
+async fn a_failed_step_can_be_retried_and_the_next_step_hears_what_it_did() {
+    use harness_core::plan::{PlanStatus, StepState};
+    let f = fixture_with(&with_verify("commands = [\"true\"]")).await;
+    f.harness.set_autonomy(Autonomy::LandSafe).await;
+    let plan = f
+        .harness
+        .propose_plan(
+            "Chain",
+            "",
+            vec![
+                // Fails until go.txt is on the branch it starts from.
+                plan_step("a", "MOCK-SH:test -f go.txt && echo made > a.md", &[]),
+                plan_step("b", "WRITE:b.md:after a", &["a"]),
+            ],
+        )
+        .await
+        .unwrap();
+    f.harness.run_plan(&plan.id, None).await.unwrap();
+    let done = plan_until(&f, &plan.id, |p| p.status == PlanStatus::Finished).await;
+    assert_eq!(done.steps[0].state, StepState::Failed);
+    assert_eq!(done.steps[1].state, StepState::Skipped);
+    // Only a failed step can be retried.
+    assert!(f.harness.retry_step(&plan.id, "b").await.is_err());
+
+    // Fix what it needed, then retry: it runs again, and so does what it held up.
+    std::fs::write(f.root.join("go.txt"), "go\n").unwrap();
+    git(&f.root, &["add", "go.txt"]).await;
+    git(&f.root, &["commit", "-q", "-m", "go"]).await;
+    let first = done.steps[0].worker_id.clone();
+    f.harness.retry_step(&plan.id, "a").await.unwrap();
+
+    let done = plan_until(&f, &plan.id, |p| p.status == PlanStatus::Finished).await;
+    assert!(
+        done.steps.iter().all(|s| s.state == StepState::Landed),
+        "{done:?}"
+    );
+    assert_ne!(done.steps[0].worker_id, first, "a fresh worker");
+    let b = f
+        .harness
+        .worker(done.steps[1].worker_id.as_ref().unwrap())
+        .await
+        .unwrap();
+    assert!(b.task.contains("builds on earlier steps"), "{}", b.task);
+    assert!(
+        b.task.contains("a.md"),
+        "the files step a changed: {}",
+        b.task
+    );
+}

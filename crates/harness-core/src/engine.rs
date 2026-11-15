@@ -1734,7 +1734,14 @@ impl Harness {
                             let worker_id = format!("w-{}", Uuid::new_v4().simple());
                             plan.steps[index].worker_id = Some(worker_id.clone());
                             plan.steps[index].state = StepState::Running;
-                            self.start_step(worker_id, step.input.clone());
+                            // A step that builds on others starts knowing what they did:
+                            // its brief carries their reports and the files they changed.
+                            let mut input = step.input.clone();
+                            let handover = self.handover(&plan, &input.depends_on).await;
+                            if !handover.is_empty() {
+                                input.task = format!("{}\n\n{handover}", input.task.trim_end());
+                            }
+                            self.start_step(worker_id, input);
                         }
                     },
                     Some(worker_id) => {
@@ -1780,6 +1787,95 @@ impl Harness {
             }
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
+    }
+
+    /// What the steps `ids` reported and changed, for a step that builds on them. Empty
+    /// when none of them ran a worker.
+    async fn handover(&self, plan: &crate::plan::Plan, ids: &[String]) -> String {
+        let mut lines = Vec::new();
+        for id in ids {
+            let Some(step) = plan.steps.iter().find(|s| &s.input.id == id) else {
+                continue;
+            };
+            let Some(record) = step.worker_id.as_deref() else {
+                continue;
+            };
+            let Some(record) = self.worker(record).await else {
+                continue;
+            };
+            let report = crate::mcp::clip(record.summary.trim(), HANDOVER_CHARS);
+            let files = record
+                .diff
+                .as_ref()
+                .map(|d| d.files.join(", "))
+                .filter(|f| !f.is_empty())
+                .map(|f| format!("\n  Files it changed (now on your branch): {f}"))
+                .unwrap_or_default();
+            lines.push(format!("- {} ({id}): {report}{files}", step.input.title));
+        }
+        if lines.is_empty() {
+            return String::new();
+        }
+        format!(
+            "This builds on earlier steps of the same plan, which have landed. What they \
+             reported:\n{}",
+            lines.join("\n")
+        )
+    }
+
+    /// Run a failed step of a plan again, with a fresh worker, and put the steps that were
+    /// skipped because of it back in line. The plan picks up again if it had finished.
+    pub async fn retry_step(self: &Arc<Self>, plan_id: &str, step_id: &str) -> Result<()> {
+        use crate::plan::{PlanStatus, StepState};
+        let (plan, restart) = {
+            let mut plans = self.plans.write().await;
+            let plan = plans
+                .get_mut(plan_id)
+                .with_context(|| format!("no plan `{plan_id}`"))?;
+            if !matches!(plan.status, PlanStatus::Running | PlanStatus::Finished) {
+                bail!("the plan isn't running");
+            }
+            let index = plan
+                .steps
+                .iter()
+                .position(|s| s.input.id == step_id)
+                .with_context(|| format!("no step `{step_id}`"))?;
+            if plan.steps[index].state != StepState::Failed {
+                bail!("only a failed step can be retried");
+            }
+            // The step, and everything skipped downstream of it, back to the start.
+            let mut reset = std::collections::HashSet::from([step_id.to_string()]);
+            loop {
+                let before = reset.len();
+                for step in &plan.steps {
+                    if step.state == StepState::Skipped
+                        && step.input.depends_on.iter().any(|d| reset.contains(d))
+                    {
+                        reset.insert(step.input.id.clone());
+                    }
+                }
+                if reset.len() == before {
+                    break;
+                }
+            }
+            for step in plan.steps.iter_mut() {
+                if reset.contains(&step.input.id) {
+                    step.state = StepState::Planned;
+                    step.worker_id = None;
+                    step.note = None;
+                }
+            }
+            let restart = plan.status == PlanStatus::Finished;
+            plan.status = PlanStatus::Running;
+            (plan.clone(), restart)
+        };
+        self.record(HarnessEvent::PlanUpdated { plan }).await;
+        if restart {
+            let harness = Arc::clone(self);
+            let plan_id = plan_id.to_string();
+            tokio::spawn(async move { harness.drive_plan(plan_id).await });
+        }
+        Ok(())
     }
 
     fn start_step(self: &Arc<Self>, worker_id: String, step: crate::plan::StepInput) {
@@ -3132,6 +3228,9 @@ impl Harness {
         self.store.lock().await.project_history(&key, limit)
     }
 }
+
+/// How much of an earlier step's report a dependent step's brief carries.
+const HANDOVER_CHARS: usize = 1_500;
 
 /// A worker's latest transcript lines a snapshot replays onto its card.
 const SNAPSHOT_TRANSCRIPT_LINES: usize = 40;

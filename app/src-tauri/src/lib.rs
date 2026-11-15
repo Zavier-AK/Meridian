@@ -1002,6 +1002,21 @@ async fn run_plan(
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Run a failed plan step again; the steps it held up follow it.
+#[tauri::command]
+async fn retry_plan_step(
+    state: State<'_, AppState>,
+    plan_id: String,
+    step_id: String,
+    project: Option<String>,
+) -> Result<(), String> {
+    harness_for(&state, project)
+        .await?
+        .retry_step(&plan_id, &step_id)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 async fn discard_plan(
     state: State<'_, AppState>,
@@ -2567,6 +2582,7 @@ pub fn run() {
             worker_snapshot,
             new_conversation,
             checks_settings,
+            retry_plan_step,
             save_checks_settings,
             answer_permission,
             revise_worker,
