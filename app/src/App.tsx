@@ -168,6 +168,8 @@ export default function App() {
   const [changesKey, setChangesKey] = useState(0);
   // False only once checked: a repository with no commits, where workers can't start.
   const [hasCommits, setHasCommits] = useState(true);
+  /** Why the home chat couldn't open at launch; `null` while it is opening or open. */
+  const [homeError, setHomeError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session?.project_root) {
@@ -388,6 +390,30 @@ export default function App() {
     }
   }, []);
 
+  /** Open (creating if need be) the home folder, the chat the app lands in. */
+  const openHome = useCallback(async () => {
+    setHomeError(null);
+    try {
+      const info = await invoke<SessionInfo>("open_home");
+      startFirst(info);
+      setView("session");
+      setActivePane("chat");
+      await refreshProjects();
+    } catch (err) {
+      setHomeError(String(err));
+    }
+    // `startFirst` only sets state; it is safe to leave out of the dependencies.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshProjects]);
+
+  // At launch: straight into the home chat, no folder to pick first.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current) return;
+    opened.current = true;
+    void openHome();
+  }, [openHome]);
+
   /** Switch projects, resetting the panes that belong to the one being left. */
   const focusProject = useCallback(
     async (projectRoot: string) => {
@@ -422,11 +448,40 @@ export default function App() {
       // one, or all the way to the start gate.
       if (session?.project_root === projectRoot) {
         if (remaining.length > 0) await focusProject(remaining[0].project_root);
-        else setSession(null);
+        else {
+          // Nothing left open: back to the home chat rather than an empty window.
+          setSession(null);
+          setChat([]);
+          setWorkers({});
+          headRun.current = null;
+          void openHome();
+        }
       }
     },
     [session, focusProject],
   );
+
+  // Opening a project, or coming back to one, replays its workers so the rail and the
+  // reviews waiting show what happened while this window wasn't watching, including
+  // work an earlier run of the app left on its branches. Live events win over the replay.
+  const frontProject = session?.project_root ?? null;
+  useEffect(() => {
+    if (!frontProject) return;
+    let cancelled = false;
+    invoke<HarnessEvent[]>("worker_snapshot", { project: frontProject })
+      .then((events) => {
+        if (cancelled || events.length === 0) return;
+        const replayed = events.reduce(reduceWorkers, {} as Record<string, Worker>);
+        setWorkers((live) => ({ ...replayed, ...live }));
+        setChangesKey((key) => key + 1);
+      })
+      .catch(() => {
+        // A readout; the project still opens without it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [frontProject]);
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -519,6 +574,10 @@ export default function App() {
         setRateLimited(payload.error === "rate_limit");
       }
       if (payload.type === "turn_interrupted") setBusy(false);
+      // Meridian told the head agent something (a worker finished): that starts a turn.
+      if (payload.type === "head_notice" && payload.run_id === headRun.current) setBusy(true);
+      // Its process died mid-turn: nothing more is coming for that turn.
+      if (payload.type === "head_exited" && payload.run_id === headRun.current) setBusy(false);
       if (payload.type === "plan_updated") {
         const incoming = payload.plan;
         setPlan((current) => {
@@ -761,6 +820,11 @@ export default function App() {
   function startFirst(info: SessionInfo) {
     setSession(info);
     const blocked = info.roles.filter((r) => !r.available);
+    // Home is where the app opens: a status line there is noise, so only problems show.
+    if (info.home) {
+      setChat(groupByReason(blocked));
+      return;
+    }
     setChat([
       {
         kind: "notice",
@@ -864,8 +928,29 @@ export default function App() {
   };
 
   if (!session) {
+    // Straight into the home chat; the folder picker is only the fallback when home
+    // could not start (no Claude CLI, say), and says why.
+    if (homeError === null) {
+      return (
+        <main className="gate opening">
+          <div className="window-drag" data-tauri-drag-region />
+          <div className="opening-mark">
+            <MeridianMark size={56} />
+            <span className="muted">Starting Meridian…</span>
+          </div>
+        </main>
+      );
+    }
     return (
-      <StartGate onStarted={startFirst} />
+      <StartGate
+        notice={`The home chat could not start: ${homeError}`}
+        onRetryHome={() => void openHome()}
+        onStarted={(info) => {
+          setHomeError(null);
+          startFirst(info);
+          void refreshProjects();
+        }}
+      />
     );
   }
 
@@ -966,7 +1051,7 @@ export default function App() {
           Meridian
         </span>
         <span className="titlebar-project" data-tauri-drag-region title={session.project_root}>
-          {session.project_root.split("/").filter(Boolean).pop() ?? session.project_root}
+          {session.home ? "Home" : session.project_root.split("/").filter(Boolean).pop() ?? session.project_root}
         </span>
         {projectRepo && (
           <button
@@ -1193,6 +1278,7 @@ export default function App() {
                 }}
                 onPermission={(id, decision) => void answerPermission(id, decision)}
                 model={headModel}
+                home={session.home}
                 promptTokens={headPrompt}
                 tools={
                   <>
@@ -1389,6 +1475,10 @@ function reduceChat(
         },
       ];
     }
+
+    case "head_notice":
+      if (event.run_id !== headRun.current) return prev;
+      return [...prev, { kind: "notice", tone: "info", text: noticeLine(event.text) }];
 
     case "note_written":
       return [...prev, { kind: "note", path: event.path, created: event.created }];
@@ -1910,6 +2000,9 @@ function historyToChat(events: HarnessEvent[]): ChatItem[] {
       case "user_message":
         items.push({ kind: "user", text: event.text, attached: event.attachments?.length });
         break;
+      case "head_notice":
+        items.push({ kind: "notice", tone: "info", text: noticeLine(event.text) });
+        break;
       case "assistant_text":
         if (!event.partial) items.push({ kind: "assistant", text: event.text });
         break;
@@ -1927,6 +2020,11 @@ function historyToChat(events: HarnessEvent[]): ChatItem[] {
     }
   }
   return items;
+}
+
+/** A harness notice to the head agent, as the chat shows it: Meridian's, not yours. */
+function noticeLine(text: string): string {
+  return `Meridian told the head agent: ${text}`;
 }
 
 function firstLine(text: string): string {

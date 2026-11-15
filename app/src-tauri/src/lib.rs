@@ -97,6 +97,9 @@ pub struct AppState {
 struct Session {
     harness: Arc<Harness>,
     head: Head,
+    /// When the head agent last started, so one that dies again straight away is not
+    /// restarted in a loop.
+    head_started: std::time::Instant,
     project_root: PathBuf,
     roles_file: PathBuf,
     model: Option<String>,
@@ -149,6 +152,8 @@ pub struct SessionInfo {
     roles: Vec<RoleView>,
     backends: Vec<DetectedBackend>,
     resumed_head_session: bool,
+    /// The home folder Meridian opens at launch, rather than one of the person's projects.
+    home: bool,
 }
 
 /// One open project, as the switcher sees it.
@@ -161,6 +166,7 @@ pub struct ProjectView {
     live: bool,
     running_workers: usize,
     pending_merges: usize,
+    home: bool,
 }
 
 #[derive(Serialize)]
@@ -240,28 +246,26 @@ fn forward_events(
                 HarnessEvent::VerificationFinished { worker_id, report } => {
                     tell_head_about_failed_checks(&app, &project, worker_id, report).await;
                 }
-                // Under `Ask`, `delegate` returned before the work ran. Close the loop so
-                // the head agent learns how each approved delegation ended.
+                // The head agent isn't waiting on this worker — it ran in the background,
+                // or after the person approved it — so tell it how it ended. Then it never
+                // has to poll, and never misses a result by ending its turn.
                 HarnessEvent::WorkerFinished {
                     worker_id,
                     summary,
                     diff,
                     is_error,
                     ..
-                } if harness.take_approved(worker_id).await => {
-                    let outcome = if *is_error { "failed" } else { "finished" };
-                    let merge = if diff.as_ref().is_some_and(|d| d.files_changed > 0) {
-                        " Its changes are on a branch; call `request_merge` to propose them."
-                    } else {
-                        ""
-                    };
+                } if harness.take_reportable(worker_id).await => {
+                    let role = harness
+                        .worker(worker_id)
+                        .await
+                        .map(|w| w.role)
+                        .filter(|r| !r.is_empty())
+                        .unwrap_or_else(|| "worker".into());
                     tell_head(
                         &app,
                         &project,
-                        &format!(
-                        "The delegation {worker_id} the person approved has {outcome}: {}.{merge}",
-                        first_line(summary)
-                    ),
+                        &worker_notice(worker_id, &role, summary, diff.as_ref(), *is_error),
                     )
                     .await;
                 }
@@ -272,6 +276,21 @@ fn forward_events(
                          settled something a later session would need, note it with notes_write."
                     ))
                     .await;
+                }
+                HarnessEvent::HeadExited { run_id } => {
+                    let message = head_exited(&app, &project).await;
+                    if !message.is_empty() {
+                        let _ = app.emit(
+                            EVENT_CHANNEL,
+                            ProjectEvent {
+                                project: &project,
+                                event: &HarnessEvent::Error {
+                                    run_id: run_id.clone(),
+                                    message,
+                                },
+                            },
+                        );
+                    }
                 }
                 HarnessEvent::DelegationDeclined { worker_id, reason } => {
                     tell_head(
@@ -339,10 +358,35 @@ async fn tell_head(app: &AppHandle, project: &str, notice: &str) {
         ..
     }) = projects.get_mut(project)
     {
-        if let Err(error) = orchestrator.send(notice).await {
+        if let Err(error) = orchestrator.notify(notice).await {
             tracing::warn!("could not send the head agent a notice: {error:#}");
         }
     }
+}
+
+/// What the head agent is told when a worker it isn't waiting on finishes.
+fn worker_notice(
+    worker_id: &str,
+    role: &str,
+    summary: &str,
+    diff: Option<&harness_core::event::DiffStat>,
+    is_error: bool,
+) -> String {
+    let outcome = if is_error { "failed" } else { "finished" };
+    let merge = match diff {
+        Some(d) if d.files_changed > 0 => format!(
+            " It changed {} file{} on its own branch; call `request_merge` to propose them, \
+             unless it is part of a plan, which proposes its own.",
+            d.files_changed,
+            if d.files_changed == 1 { "" } else { "s" }
+        ),
+        _ => String::new(),
+    };
+    format!(
+        "Worker {worker_id} ({role}) has {outcome}: {}.{merge} Read its full result with \
+         `collect` if you need more than this line.",
+        first_line(summary)
+    )
 }
 
 fn first_line(text: &str) -> String {
@@ -457,6 +501,49 @@ pub(crate) async fn set_up_git(root: &std::path::Path) -> Result<bool, String> {
 #[tauri::command]
 async fn make_first_commit(project_root: String) -> Result<bool, String> {
     set_up_git(&PathBuf::from(project_root)).await
+}
+
+/// What the home folder's README says, for anyone who finds it in Finder.
+const HOME_README: &str = "# Meridian Home\n\n\
+This is the folder Meridian opens when you start it, for chats that aren't about one of \
+your projects yet. Anything the agents make from those chats is built here, on its own \
+git history, so nothing lands without your say-so.\n\n\
+To work on a project, open its folder from Meridian's sidebar.\n";
+
+/// Make sure the home folder is ready to work in: a git repository with a first commit,
+/// a fleet, and the marker that tells the head agent where it is.
+pub(crate) async fn prepare_home(root: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(root).map_err(|e| format!("creating {}: {e}", root.display()))?;
+    let readme = root.join("README.md");
+    if !readme.exists() {
+        std::fs::write(&readme, HOME_README)
+            .map_err(|e| format!("writing {}: {e}", readme.display()))?;
+    }
+    let roles = root.join("roles.toml");
+    if !roles.exists() {
+        std::fs::write(&roles, DEFAULT_ROLES)
+            .map_err(|e| format!("writing {}: {e}", roles.display()))?;
+    }
+    set_up_git(root).await?;
+    let marker = root.join(harness_core::orchestrator::HOME_MARKER);
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if !marker.exists() {
+        std::fs::write(&marker, "").map_err(|e| format!("writing {}: {e}", marker.display()))?;
+    }
+    Ok(())
+}
+
+/// Open the home folder, creating it the first time, so there is a chat to type into the
+/// moment the app opens.
+#[tauri::command]
+async fn open_home(app: AppHandle, state: State<'_, AppState>) -> Result<SessionInfo, String> {
+    let root = settings::load()
+        .home_folder()
+        .ok_or("could not work out where the home folder goes: HOME is not set")?;
+    prepare_home(&root).await?;
+    start_session(app, state, root.display().to_string(), None, None).await
 }
 
 /// Write the default fleet into a project that has none.
@@ -594,28 +681,7 @@ async fn start_session(
         let mut projects = state.projects.lock().await;
         if let Some(session) = projects.get_mut(&key) {
             if !session.is_live() {
-                load_extras(&session.harness).await;
-                let (orchestrator, events) = Orchestrator::start(
-                    Arc::clone(&session.harness),
-                    &session.project_root,
-                    session.model.clone(),
-                    Some(settings::load().max_turns),
-                    session
-                        .harness
-                        .resumable_backend_session()
-                        .await
-                        .map_err(|e| format!("{e:#}"))?,
-                    hook_command(),
-                )
-                .await
-                .map_err(|e| format!("{e:#}"))?;
-                forward_events(
-                    app.clone(),
-                    Arc::clone(&session.harness),
-                    key.clone(),
-                    events,
-                );
-                session.head = Head::Live(Box::new(orchestrator));
+                relaunch_head(&app, &key, session).await?;
             }
             let info = describe(&key, session).await;
             drop(projects);
@@ -667,6 +733,12 @@ async fn start_session(
         tx,
     ));
     load_extras(&harness).await;
+    // Work an earlier run left on its branches comes back to the rail and the reviews.
+    match harness.restore().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("restored {n} worker(s) from earlier sessions"),
+        Err(error) => tracing::warn!("could not restore earlier workers: {error:#}"),
+    }
     harness.set_notes(settings::load().notes.notes()).await;
     harness
         .set_autonomy(harness_core::autonomy::load(&project))
@@ -700,6 +772,7 @@ async fn start_session(
         mcp_url: orchestrator.mcp_url(),
         backends: harness_core::detection::detect_backends().await,
         resumed_head_session,
+        home: harness_core::orchestrator::is_home(&project),
         roles: harness
             .list_roles_probed()
             .await
@@ -722,6 +795,7 @@ async fn start_session(
         Session {
             harness,
             head: Head::Live(Box::new(orchestrator)),
+            head_started: std::time::Instant::now(),
             project_root: project,
             roles_file,
             model: model.clone(),
@@ -743,6 +817,7 @@ async fn describe(key: &str, session: &Session) -> SessionInfo {
         backends: harness_core::detection::detect_backends().await,
         // True only of a fresh start; re-focusing an open project is not a resume.
         resumed_head_session: false,
+        home: harness_core::orchestrator::is_home(&session.project_root),
         roles: session
             .harness
             .list_roles_probed()
@@ -810,6 +885,16 @@ async fn session_roles(
             unavailable_reason: r.unavailable_reason,
         })
         .collect())
+}
+
+/// The project's workers as events, for a window that opens or returns to it to replay:
+/// the rail, the merges waiting and their checks.
+#[tauri::command]
+async fn worker_snapshot(
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<Vec<HarnessEvent>, String> {
+    Ok(harness_for(&state, project).await?.snapshot_events().await)
 }
 
 #[tauri::command]
@@ -1472,6 +1557,11 @@ async fn reconnect_head(
     let session = projects
         .get_mut(&key)
         .ok_or("no session for that project")?;
+    relaunch_head(&app, &key, session).await
+}
+
+/// Shut the head agent down if it is up, and start it again on the same conversation.
+async fn relaunch_head(app: &AppHandle, key: &str, session: &mut Session) -> Result<(), String> {
     if let Head::Live(orchestrator) = std::mem::replace(&mut session.head, Head::Suspended) {
         if let Err(error) = orchestrator.shutdown().await {
             tracing::warn!("head agent did not shut down cleanly: {error:#}");
@@ -1493,9 +1583,53 @@ async fn reconnect_head(
     )
     .await
     .map_err(|e| format!("{e:#}"))?;
-    forward_events(app, Arc::clone(&session.harness), key, events);
+    forward_events(
+        app.clone(),
+        Arc::clone(&session.harness),
+        key.to_string(),
+        events,
+    );
     session.head = Head::Live(Box::new(orchestrator));
+    session.head_started = std::time::Instant::now();
     Ok(())
+}
+
+/// A head agent shorter-lived than this that dies is not restarted again by itself.
+const HEAD_RESTART_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The head agent's process ended on its own. Start it again on the same conversation,
+/// once: one that dies again right after starting is left for the person, with a notice
+/// saying so, rather than restarted in a loop. Returns what to tell the person.
+async fn head_exited(app: &AppHandle, project: &str) -> String {
+    let state = app.state::<AppState>();
+    let mut projects = state.projects.lock().await;
+    let Some(session) = projects.get_mut(project) else {
+        return String::new();
+    };
+    // Only the head agent that is meant to be up: one shut down on purpose, or already
+    // replaced by a fresh one, is nothing to recover.
+    let Head::Live(orchestrator) = &mut session.head else {
+        return String::new();
+    };
+    if !orchestrator.has_exited() {
+        return String::new();
+    }
+    if session.head_started.elapsed() < HEAD_RESTART_GRACE {
+        session.head = Head::Suspended;
+        return "The head agent stopped again just after starting, so Meridian left it off. \
+                Check that `claude` runs in a terminal, then use Reconnect in Settings › \
+                Claude sign-in."
+            .into();
+    }
+    match relaunch_head(app, project, session).await {
+        Ok(()) => "The head agent stopped unexpectedly. Meridian restarted it on the same \
+                   conversation; whatever it was doing when it stopped did not finish, so ask \
+                   again if it matters."
+            .into(),
+        Err(error) => {
+            format!("The head agent stopped unexpectedly and could not be restarted: {error}")
+        }
+    }
 }
 
 /// Open a pull request's page.
@@ -1822,19 +1956,26 @@ async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectView>, S
     let mut out = Vec::new();
     for (key, session) in projects.iter() {
         let workers = session.harness.workers().await;
+        let home = harness_core::orchestrator::is_home(&session.project_root);
         out.push(ProjectView {
             project_root: key.clone(),
-            name: PathBuf::from(key)
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| key.clone()),
+            name: if home {
+                "Home".to_string()
+            } else {
+                PathBuf::from(key)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| key.clone())
+            },
             active: active.as_deref() == Some(key.as_str()),
             live: session.is_live(),
             running_workers: workers.iter().filter(|w| !w.status.is_terminal()).count(),
             pending_merges: session.harness.pending_merges().await.len(),
+            home,
         });
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
+    // Home first, then projects by name.
+    out.sort_by(|a, b| b.home.cmp(&a.home).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
 }
 
@@ -1864,24 +2005,7 @@ async fn focus_project(
 
     let session = projects.get_mut(&key).ok_or("that project is not open")?;
     if !session.is_live() {
-        load_extras(&session.harness).await;
-        let resume = session
-            .harness
-            .resumable_backend_session()
-            .await
-            .map_err(|e| format!("{e:#}"))?;
-        let (orchestrator, events) = Orchestrator::start(
-            Arc::clone(&session.harness),
-            &session.project_root,
-            session.model.clone(),
-            Some(settings::load().max_turns),
-            resume,
-            hook_command(),
-        )
-        .await
-        .map_err(|e| format!("{e:#}"))?;
-        forward_events(app, Arc::clone(&session.harness), key.clone(), events);
-        session.head = Head::Live(Box::new(orchestrator));
+        relaunch_head(&app, &key, session).await?;
     }
 
     let info = describe(&key, session).await;
@@ -2365,6 +2489,8 @@ pub fn run() {
             inspect_project,
             write_default_roles,
             make_first_commit,
+            open_home,
+            worker_snapshot,
             answer_permission,
             revise_worker,
             changes_overview,
@@ -2498,6 +2624,29 @@ mod tests {
         assert!(!set_up_git(root).await.unwrap());
         let status = inspect_project(root.display().to_string()).await;
         assert!(status.is_git_repo && status.has_commits);
+    }
+
+    #[tokio::test]
+    async fn the_home_folder_is_made_ready_to_chat_in_and_left_alone_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Meridian Home");
+
+        prepare_home(&root).await.unwrap();
+        assert!(harness_core::orchestrator::is_home(&root));
+        assert!(RoleRegistry::load(root.join("roles.toml")).is_ok());
+        let tracked = run_git(&root, &["ls-files"]).await.unwrap();
+        let tracked: Vec<&str> = tracked.lines().collect();
+        assert_eq!(tracked, vec![".gitignore", "README.md", "roles.toml"]);
+
+        // A second launch keeps whatever the person changed.
+        std::fs::write(root.join("README.md"), "mine\n").unwrap();
+        prepare_home(&root).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("README.md")).unwrap(),
+            "mine\n"
+        );
+        // A plain project is never mistaken for home.
+        assert!(!harness_core::orchestrator::is_home(dir.path()));
     }
 
     #[test]

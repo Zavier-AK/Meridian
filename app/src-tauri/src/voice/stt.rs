@@ -240,9 +240,10 @@ mod tests {
             .position(|w| w == b"data")
             .expect("a data chunk")
             + 8;
-        bytes[data..]
-            .chunks_exact(2)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+        let (samples, _) = bytes[data..].as_chunks::<2>();
+        samples
+            .iter()
+            .map(|b| i16::from_le_bytes(*b) as f32 / 32768.0)
             .collect()
     }
 

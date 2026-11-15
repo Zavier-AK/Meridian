@@ -192,6 +192,46 @@ pub struct NoteWriteParams {
     pub mode: Option<String>,
 }
 
+/// A worker's report as `check_workers` gives it: enough to see how it went.
+const STATUS_SUMMARY_CHARS: usize = 400;
+/// A worker's report as `delegate` and `collect` give it. A worker can end with pages of
+/// output; every character of it would sit in the head agent's context for the rest of
+/// the conversation, so past this it is cut, and says so.
+const RESULT_CHARS: usize = 8_000;
+/// Finished workers `check_workers` lists when asked about none in particular.
+const RECENT_FINISHED: usize = 8;
+
+/// `text`, cut to at most `max` characters at a character boundary, marked when cut.
+pub fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max).collect();
+    format!(
+        "{cut}… [cut short; {} characters in all]",
+        text.chars().count()
+    )
+}
+
+/// The workers worth listing unasked: every one still going, and the few that finished
+/// most recently — not every worker the session has ever had.
+fn recent_workers(
+    all: Vec<crate::engine::WorkerRecord>,
+    numbers: &std::collections::HashMap<String, u32>,
+) -> Vec<crate::engine::WorkerRecord> {
+    let order = |w: &crate::engine::WorkerRecord| numbers.get(&w.id).copied().unwrap_or(u32::MAX);
+    let (live, mut done): (Vec<_>, Vec<_>) = all.into_iter().partition(|w| !w.status.is_terminal());
+    done.sort_by_key(|w| std::cmp::Reverse(order(w)));
+    done.truncate(RECENT_FINISHED);
+    let mut out: Vec<_> = live.into_iter().chain(done).collect();
+    out.sort_by_key(order);
+    out
+}
+
+/// How long the head agent's CLI waits on one of these tools, in milliseconds: three
+/// hours. See [`McpServer::claude_mcp_config_with`].
+pub const TOOL_TIMEOUT_MS: u64 = 3 * 60 * 60 * 1000;
+
 #[derive(Clone)]
 pub struct HarnessTools {
     harness: Arc<Harness>,
@@ -261,7 +301,11 @@ impl HarnessTools {
             .delegate(&params.role, &params.task, params.context_files)
             .await
         {
-            Ok(record) => Json(record.into()),
+            Ok(record) => {
+                let mut summary = WorkerSummary::from(record);
+                summary.summary = clip(&summary.summary, RESULT_CHARS);
+                Json(summary)
+            }
             Err(err) => Json(failed_summary(params.role, err)),
         }
     }
@@ -269,8 +313,9 @@ impl HarnessTools {
     #[tool(
         name = "delegate_async",
         description = "Start a worker and return its id immediately, without waiting. Use \
-                       this to fan several workers out in parallel, then poll with \
-                       check_workers and read results with collect."
+                       this to fan several workers out in parallel. You are sent a message \
+                       when each one finishes, so do not poll: end your turn once they are \
+                       started, and read a result with collect when its message arrives."
     )]
     async fn delegate_async(
         &self,
@@ -305,8 +350,11 @@ impl HarnessTools {
 
     #[tool(
         name = "check_workers",
-        description = "Report the status of workers started with delegate_async. Statuses \
-                       are queued, blocked, running, done, failed, or cancelled."
+        description = "Report the status of workers, briefly: each summary is cut short, \
+                       and collect reads one in full. Pass worker_ids to ask about \
+                       particular workers; with none, only those still running or finished \
+                       recently are listed. Statuses are queued, blocked, preparing, \
+                       running, done, failed, or cancelled."
     )]
     async fn check_workers(
         &self,
@@ -314,7 +362,7 @@ impl HarnessTools {
     ) -> Json<Vec<WorkerSummary>> {
         let all = self.harness.workers().await;
         let filtered = if params.worker_ids.is_empty() {
-            all
+            recent_workers(all, &self.harness.worker_numbers().await)
         } else {
             all.into_iter()
                 .filter(|w| params.worker_ids.contains(&w.id))
@@ -323,6 +371,7 @@ impl HarnessTools {
         let mut summaries = Vec::with_capacity(filtered.len());
         for record in filtered {
             let mut summary = WorkerSummary::from(record);
+            summary.summary = clip(&summary.summary, STATUS_SUMMARY_CHARS);
             summary.verification = self.harness.verification_line(&summary.worker_id).await;
             summaries.push(summary);
         }
@@ -341,6 +390,7 @@ impl HarnessTools {
         match self.harness.worker(&params.worker_id).await {
             Some(record) => {
                 let mut summary = WorkerSummary::from(record);
+                summary.summary = clip(&summary.summary, RESULT_CHARS);
                 summary.verification = self.harness.verification_line(&summary.worker_id).await;
                 Json(serde_json::to_value(summary).unwrap_or_default())
             }
@@ -550,7 +600,12 @@ impl McpServer {
             serde_json::json!({
                 "type": "http",
                 "url": self.url(),
-                "headers": { "Authorization": format!("Bearer {}", self.token) }
+                "headers": { "Authorization": format!("Bearer {}", self.token) },
+                // A synchronous `delegate` is silent until its worker finishes. Claude
+                // Code abandons an HTTP tool call after five quiet minutes unless the
+                // server sets its own timeout, which also becomes the floor for that
+                // idle check. Long enough for any real worker, short of forever.
+                "timeout": TOOL_TIMEOUT_MS,
             }),
         );
         serde_json::json!({ "mcpServers": servers }).to_string()
@@ -670,4 +725,55 @@ where
         shutdown,
         handle,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::WorkerRecord;
+    use crate::event::{Usage, WorkerStatus};
+
+    #[test]
+    fn long_reports_are_cut_at_a_character_and_say_so() {
+        assert_eq!(clip("short", 10), "short");
+        let cut = clip("ééééé", 3);
+        assert!(cut.starts_with("ééé… [cut short; 5 characters"), "{cut}");
+    }
+
+    fn worker(id: &str, status: WorkerStatus) -> WorkerRecord {
+        WorkerRecord {
+            id: id.into(),
+            role: "builder".into(),
+            status,
+            task: String::new(),
+            summary: String::new(),
+            usage: Usage::default(),
+            diff: None,
+            branch: None,
+            is_error: false,
+        }
+    }
+
+    #[test]
+    fn unasked_status_lists_live_workers_and_only_the_latest_finished() {
+        let mut all = vec![worker("live", WorkerStatus::Running)];
+        let mut numbers = std::collections::HashMap::from([("live".to_string(), 1)]);
+        for n in 0..20u32 {
+            let id = format!("done-{n}");
+            numbers.insert(id.clone(), n + 2);
+            all.push(worker(&id, WorkerStatus::Done));
+        }
+        let listed: Vec<String> = recent_workers(all, &numbers)
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(listed.len(), 1 + RECENT_FINISHED);
+        assert_eq!(listed[0], "live");
+        assert_eq!(
+            listed.last().unwrap(),
+            "done-19",
+            "in the order they started"
+        );
+        assert!(!listed.contains(&"done-0".to_string()));
+    }
 }

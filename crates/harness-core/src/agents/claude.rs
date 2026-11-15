@@ -270,6 +270,8 @@ pub struct ClaudeSession {
     pending: Pending,
     /// For telling the stream a request was answered.
     events: tokio::sync::mpsc::UnboundedSender<HarnessEvent>,
+    /// Set when this end shuts the process down, so its exit isn't reported as a crash.
+    closing: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Correlates control requests with their responses.
     next_request: u64,
     pub run_id: String,
@@ -315,6 +317,8 @@ impl ClaudeSession {
         let pending: Pending = Default::default();
         let pump_pending = pending.clone();
         let events = tx.clone();
+        let closing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pump_closing = closing.clone();
 
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -340,6 +344,14 @@ impl ClaudeSession {
                     Err(err) => tracing::warn!(run_id = %pump_run_id, "{err}"),
                 }
             }
+            // The process's output ended. Unless this end closed it, it died on its own,
+            // and whoever is waiting on a turn would otherwise wait forever.
+            if !pump_closing.load(std::sync::atomic::Ordering::SeqCst) {
+                tracing::warn!(run_id = %pump_run_id, "the claude process exited unexpectedly");
+                let _ = tx.send(HarnessEvent::HeadExited {
+                    run_id: pump_run_id.clone(),
+                });
+            }
         });
 
         Ok((
@@ -348,6 +360,7 @@ impl ClaudeSession {
                 stdin,
                 pending,
                 events,
+                closing,
                 next_request: 0,
                 run_id,
                 backend_session_id: None,
@@ -516,8 +529,15 @@ impl ClaudeSession {
         Ok(rules)
     }
 
+    /// Whether the process has ended, for whatever reason.
+    pub fn has_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
     /// Close stdin and wait for the process to drain.
     pub async fn shutdown(mut self) -> Result<()> {
+        self.closing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         drop(self.stdin);
         // SIGTERM would leave the in-flight turn unfinished; closing stdin lets it settle.
         let _ = self.child.wait().await;

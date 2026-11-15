@@ -67,10 +67,42 @@ a first-class tool call:
 |---|---|
 | `list_roles` | The fleet: model, isolation, what each role is for |
 | `delegate` | Run a worker, wait, return its result |
-| `delegate_async` | Fan out; returns a worker id immediately |
-| `check_workers` | Poll async workers |
+| `delegate_async` | Fan out; returns a worker id immediately, and the head agent is sent a notice when it finishes |
+| `check_workers` | A short status of workers still running and the latest finished |
 | `collect` | Read a finished worker's result and diff |
 | `request_merge` | **Propose** landing a branch — never lands it |
+
+Nothing has to poll. When a worker started with `delegate_async` (or one you approved under
+*Ask*) finishes, Meridian sends the head agent a notice with how it went. The chat shows
+these as Meridian's lines, never as messages from you. What a worker reports is cut short
+before it reaches the head agent (8,000 characters from `delegate` and `collect`, 400 per
+worker from `check_workers`), so one long report can't fill its context for the rest of the
+conversation. The full report stays on the worker's card.
+
+A synchronous `delegate` can take as long as its worker needs: the harness tells Claude
+Code to wait up to three hours on its tools, rather than the five quiet minutes it allows
+by default.
+
+### How many workers, and for how long
+
+`[limits]` in `roles.toml` puts two rails on the fleet:
+
+```toml
+[limits]
+max_parallel_workers = 4   # more than this wait as queued
+worker_timeout_mins  = 90  # a worker running longer is stopped
+```
+
+A worker stopped by the time limit fails with a note saying so, and whatever it wrote is
+kept on its branch to review, as when you stop one yourself.
+
+### If the head agent's process stops
+
+When the head agent's `claude` process ends without being asked to (a crash, or the CLI
+quitting), Meridian starts it again on the same conversation and says so in the chat. The
+turn it was on does not finish, so ask again if it mattered. If it stops again within a
+minute of starting, Meridian leaves it off and tells you to check `claude` in a terminal
+and use **Reconnect** in Settings › Claude sign-in.
 
 `approve_merge` is deliberately *not* an MCP tool. It exists only on the host side, driven
 by a click in the app, so no amount of model output can land code on its own.
@@ -224,7 +256,11 @@ agent's beside its model in the chat box, so a change that makes it grow is visi
 ## Verification before merge
 
 Every proposed merge is checked before it reaches you, in a fresh checkout of exactly
-what would land. The idea comes from Kun Chen's
+what would land: the worker's branch merged with your branch as it is *now*, not as it was
+when the worker started. Two changes that each pass alone can break together, and this is
+where that shows. A branch that no longer merges cleanly fails a **Merge** check naming the
+files changed on both sides, so it waits for you. A change that would land by itself is
+checked again first if your branch moved while its checks ran. The idea comes from Kun Chen's
 [No Mistakes](https://github.com/kunchenguid/no-mistakes), and from Boris Cherny's point
 that giving an agent a way to check its work is what makes it good. The checks run
 cheapest first:
@@ -802,6 +838,21 @@ visibly apart because conflating them would be worse than showing nothing:
 Quota states are `available`, `stale` and `missing`, borrowed from Codex's own `/status`.
 A meter that says unknown is more useful than one that says 0%.
 
+## Home
+
+Meridian opens straight into a chat. There's no folder to pick first: at launch it opens
+its **home** folder, `~/Documents/Meridian Home` (change it in Settings › Home), and the
+chat is ready to type into.
+
+The first launch sets the folder up: git with a first commit, a README, and the default
+`roles.toml`. The head agent knows it's in the home space. It answers questions directly,
+builds small things there, and points you to **Open a project** when you mean an existing
+project. Home sits first in the sidebar with the Meridian mark and stays open; closing your
+last project brings you back to it.
+
+If home can't start (no `claude` on `PATH`, say), the folder picker appears instead, with
+the reason and a button to try home again.
+
 ## Working on several projects
 
 The sidebar keeps more than one project open at once. Each gets its own engine, its own
@@ -819,6 +870,12 @@ What they do share is your subscription, so the design protects it:
 - **The budget meter sums every open project.** Each project's usage lives in its own
   database, but the five-hour window being measured belongs to the account, so reporting
   one project's burn would understate it by however many others are open.
+
+Coming back to a project, or reopening Meridian, brings its workers back too. Finished
+work lives on `harness/…` branches and its story is in the project's event log. So after a
+restart, a change that was waiting for review is waiting again, with its checks if they had
+finished. A finished change that was never proposed is back on the rail, ready to propose.
+Branches Meridian has no record of are left alone.
 
 The sidebar shows running workers and waiting diffs for *every* project, not just the
 active one. That is deliberate: the most common way people lose work with tools like this
@@ -947,7 +1004,7 @@ real bill.
 ## Testing
 
 ```bash
-cargo test                        # 275 engine tests, no network, no CLI login needed
+cargo test                        # 354 engine tests, no network, no CLI login needed
 cd app && npx tsc --noEmit        # frontend
 ```
 
@@ -962,8 +1019,12 @@ Preview discovery, URL safety, settings — run on their own:
 cargo test --manifest-path app/src-tauri/Cargo.toml
 ```
 
-That makes **275 engine tests, 297 including the Tauri shell** — worth stating explicitly,
+That makes **354 engine tests, and 32 more in the Tauri shell**, worth stating explicitly,
 because the two numbers measure different things and have drifted apart before.
+
+CI (`.github/workflows/ci.yml`) runs all of it on every pull request and on `main`:
+`cargo fmt --check`, clippy with warnings as errors, and the tests, for both workspaces,
+plus the frontend's typecheck and build.
 
 ## Notes and caveats
 

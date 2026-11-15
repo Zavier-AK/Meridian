@@ -74,11 +74,16 @@ pub struct Harness {
     verifications: RwLock<HashMap<String, VerificationState>>,
     /// Verification runs tests and possibly a local model, both heavy; one at a time.
     verify_slots: Arc<tokio::sync::Semaphore>,
+    /// Workers running at once, from `limits.max_parallel_workers` when the session
+    /// started; the rest wait as queued.
+    worker_slots: Arc<tokio::sync::Semaphore>,
     /// How much runs without the person. See [`crate::autonomy`].
     autonomy: RwLock<crate::autonomy::Autonomy>,
     /// Delegations waiting for the person's approval, keyed by worker id.
     approvals: RwLock<HashMap<String, PendingDelegation>>,
-    /// Workers the person approved, so their outcome can be reported to the head agent.
+    /// Workers whose outcome the head agent is told about when they finish, because it
+    /// isn't waiting for them: ones the person approved, and ones started in the
+    /// background with `delegate_async`.
     approved: RwLock<std::collections::HashSet<String>>,
     /// Merges that landed, with their merge commit, so a landing can be undone.
     landed: RwLock<HashMap<String, Landed>>,
@@ -144,7 +149,11 @@ impl Harness {
         session_id: impl Into<String>,
         events: EventSink,
     ) -> Self {
+        let worker_slots = Arc::new(tokio::sync::Semaphore::new(
+            registry.limits.max_parallel_workers,
+        ));
         Self {
+            worker_slots,
             registry: RwLock::new(registry),
             workspaces,
             store: Mutex::new(store),
@@ -398,19 +407,36 @@ impl Harness {
         Ok(())
     }
 
-    /// Whether the person approved this worker, forgetting it once asked — so its outcome
-    /// is reported to the head agent exactly once.
-    pub async fn take_approved(&self, worker_id: &str) -> bool {
+    /// Whether the head agent should be told how this worker ended, forgetting it once
+    /// asked — so its outcome is reported exactly once.
+    pub async fn take_reportable(&self, worker_id: &str) -> bool {
         self.approved.write().await.remove(worker_id)
     }
 
+    /// A worker that could not start: failed, said once. A worker already settled is left
+    /// as it is, and one that never got a record (its role didn't resolve) gets one, so
+    /// nothing waiting on it — a plan step, the rail — waits forever.
     async fn fail_before_start(&self, worker_id: &str, reason: &str) {
-        if let Some(mut record) = self.worker(worker_id).await {
-            record.status = WorkerStatus::Failed;
-            record.is_error = true;
-            record.summary = reason.to_string();
-            self.upsert(record).await;
+        let existing = self.worker(worker_id).await;
+        if existing.as_ref().is_some_and(|r| r.status.is_terminal()) {
+            return;
         }
+        let mut record = existing.unwrap_or_else(|| WorkerRecord {
+            id: worker_id.to_string(),
+            role: String::new(),
+            status: WorkerStatus::Queued,
+            task: String::new(),
+            summary: String::new(),
+            usage: Usage::default(),
+            diff: None,
+            branch: None,
+            is_error: false,
+        });
+        record.status = WorkerStatus::Failed;
+        record.is_error = true;
+        record.summary = reason.to_string();
+        self.upsert(record).await;
+        self.cancels.write().await.remove(worker_id);
         self.record(HarnessEvent::WorkerFinished {
             worker_id: worker_id.to_string(),
             summary: reason.to_string(),
@@ -647,6 +673,14 @@ impl Harness {
         })
         .await;
 
+        // At most so many run at once; the rest stay queued until one finishes. Stopping a
+        // queued worker stops the wait too.
+        let _slot = tokio::select! {
+            permit = Arc::clone(&self.worker_slots).acquire_owned() => permit.ok(),
+            _ = stopped.wait_for(|stop| *stop) => None,
+        };
+        let timeout_mins = self.registry.read().await.limits.worker_timeout_mins;
+
         // Shared-mode workers queue behind each other; say so rather than looking hung.
         if role.isolation == crate::roles::Isolation::Shared {
             self.set_status(&worker_id, WorkerStatus::Blocked).await;
@@ -661,11 +695,21 @@ impl Harness {
             self.set_status(&worker_id, WorkerStatus::Preparing).await;
         }
 
-        let workspace = self
+        let workspace = match self
             .workspaces
             .prepare_from(&worker_id, role.isolation, base.unwrap_or("HEAD"))
             .await
-            .context("preparing the worker's workspace")?;
+            .context("preparing the worker's workspace")
+        {
+            Ok(workspace) => workspace,
+            Err(err) => {
+                // Settled here, not left "preparing" for good: a worker stuck in a live
+                // state also keeps its project from ever suspending.
+                self.fail_before_start(&worker_id, &format!("{err:#}"))
+                    .await;
+                return Err(err);
+            }
+        };
 
         self.record(HarnessEvent::WorkerSpawned {
             worker_id: worker_id.clone(),
@@ -715,6 +759,11 @@ impl Harness {
             tokio::select! {
                 outcome = agents::run_worker(&spec, &self.events) => outcome,
                 _ = stopped.wait_for(|stop| *stop) => Ok(stopped_outcome()),
+                // A CLI that hangs would otherwise hold its slot, and its worktree, for
+                // good. Dropping the future kills it, as a stop does.
+                _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_mins * 60)) => {
+                    Ok(timed_out_outcome(timeout_mins))
+                }
             }
         };
         self.cancels.write().await.remove(&worker_id);
@@ -818,7 +867,8 @@ impl Harness {
         Ok(record)
     }
 
-    /// Start a worker and return immediately, so the orchestrator can fan out.
+    /// Start a worker and return immediately, so the orchestrator can fan out. The head
+    /// agent is told how it ended when it finishes, so it never has to poll.
     pub async fn delegate_async(
         self: &Arc<Self>,
         role: &str,
@@ -830,6 +880,8 @@ impl Harness {
         let resolved = self.resolve_role(role).await?;
         self.registry.read().await.get(&resolved)?;
 
+        // One id from start to finish: the one returned here is the one the worker runs
+        // under, so `check_workers`, the rail and the merge gate all agree on it.
         let worker_id = format!("w-{}", Uuid::new_v4().simple());
         self.upsert(WorkerRecord {
             id: worker_id.clone(),
@@ -843,27 +895,17 @@ impl Harness {
             is_error: false,
         })
         .await;
+        self.approved.write().await.insert(worker_id.clone());
 
         let harness = Arc::clone(self);
-        let placeholder = worker_id.clone();
+        let id = worker_id.clone();
         let task = task.to_string();
-
         tokio::spawn(async move {
-            match harness.delegate(&resolved, &task, context_files).await {
-                Ok(record) => {
-                    // The real run allocated its own id; alias the placeholder to it so
-                    // `check_workers` and `collect` can find the result.
-                    let mut workers = harness.workers.write().await;
-                    workers.insert(placeholder, record);
-                }
-                Err(err) => {
-                    let mut workers = harness.workers.write().await;
-                    if let Some(record) = workers.get_mut(&placeholder) {
-                        record.status = WorkerStatus::Failed;
-                        record.is_error = true;
-                        record.summary = format!("{err:#}");
-                    }
-                }
+            if let Err(err) = harness
+                .run_delegation(id.clone(), &resolved, &task, context_files)
+                .await
+            {
+                harness.fail_before_start(&id, &format!("{err:#}")).await;
             }
         });
 
@@ -883,6 +925,150 @@ impl Harness {
         let mut all: Vec<_> = self.workers.read().await.values().cloned().collect();
         all.sort_by(|a, b| a.id.cmp(&b.id));
         all
+    }
+
+    /// Pick up the work an earlier run of the app left behind. Everything a session
+    /// knows lives in memory, but finished work is on `harness/…` branches and its story
+    /// is in the event log: a branch with changes not yet in the checkout comes back as a
+    /// finished worker, and one that had been proposed comes back waiting for review,
+    /// with its checks if they had finished. Returns how many came back.
+    ///
+    /// Workers that never committed anything (a crash mid-run) are not touched: their
+    /// worktree is left where it is, since this process cannot tell it from one another
+    /// copy of Meridian is still using.
+    pub async fn restore(&self) -> Result<usize> {
+        let branches = self.workspaces.harness_branches().await?;
+        let mut restored = 0;
+        for branch in branches {
+            let Some(worker_id) = branch
+                .strip_prefix(&format!("{}/", crate::isolation::BRANCH_PREFIX))
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if self.worker(&worker_id).await.is_some() {
+                continue;
+            }
+            if self.workspaces.is_merged(&branch).await.unwrap_or(true) {
+                continue;
+            }
+            let history = self
+                .store
+                .lock()
+                .await
+                .worker_history(&worker_id)
+                .unwrap_or_default();
+            // A branch with no story is not one of ours to explain (a night shift's, or
+            // made by hand); it stays where it is, unlisted.
+            let Some(record) = restored_record(&worker_id, &branch, &history) else {
+                continue;
+            };
+            let Ok(diff) = self.workspaces.branch_diffstat(&branch).await else {
+                continue;
+            };
+            if diff.files_changed == 0 {
+                continue;
+            }
+            let proposed = history
+                .iter()
+                .any(|e| matches!(e, HarnessEvent::MergeRequested { .. }));
+            let report = history.iter().rev().find_map(|e| match e {
+                HarnessEvent::VerificationFinished { report, .. } => Some(report.clone()),
+                _ => None,
+            });
+
+            {
+                let mut numbers = self.worker_numbers.write().await;
+                let next = numbers.len() as u32 + 1;
+                numbers.entry(worker_id.clone()).or_insert(next);
+            }
+            self.upsert(WorkerRecord {
+                diff: Some(diff),
+                ..record
+            })
+            .await;
+            if proposed {
+                self.pending_merges
+                    .write()
+                    .await
+                    .insert(worker_id.clone(), branch.clone());
+                if let Some(report) = report {
+                    self.verifications
+                        .write()
+                        .await
+                        .insert(worker_id.clone(), VerificationState::Done { report });
+                }
+            }
+            restored += 1;
+        }
+        Ok(restored)
+    }
+
+    /// The session's workers as events, in the order they started: what a window that
+    /// opens (or comes back to) a project replays to draw the rail, the reviews waiting
+    /// and their checks, without having seen any of it happen.
+    pub async fn snapshot_events(&self) -> Vec<HarnessEvent> {
+        let numbers = self.worker_numbers().await;
+        let mut workers = self.workers().await;
+        workers.sort_by_key(|w| numbers.get(&w.id).copied().unwrap_or(u32::MAX));
+        let pending: HashMap<String, String> = self.pending_merges().await.into_iter().collect();
+        let registry = self.registry.read().await;
+        let mut out = Vec::new();
+        for worker in workers {
+            let role = registry.roles.get(&worker.role);
+            out.push(HarnessEvent::WorkerSpawned {
+                worker_id: worker.id.clone(),
+                role: worker.role.clone(),
+                provider: role
+                    .map(|r| r.provider.as_str().to_string())
+                    .unwrap_or_default(),
+                model: role.and_then(|r| r.model.clone()),
+                isolation: role
+                    .map(|r| r.isolation.as_str().to_string())
+                    .unwrap_or_default(),
+                cwd: String::new(),
+                number: numbers.get(&worker.id).copied().unwrap_or(0),
+                task: worker.task.clone(),
+            });
+            out.push(HarnessEvent::WorkerStatusChanged {
+                worker_id: worker.id.clone(),
+                status: worker.status,
+            });
+            if worker.status.is_terminal() {
+                out.push(HarnessEvent::WorkerFinished {
+                    worker_id: worker.id.clone(),
+                    summary: worker.summary.clone(),
+                    usage: worker.usage,
+                    diff: worker.diff.clone(),
+                    is_error: worker.is_error,
+                });
+            }
+            if let Some(branch) = pending.get(&worker.id) {
+                out.push(HarnessEvent::MergeRequested {
+                    worker_id: worker.id.clone(),
+                    branch: branch.clone(),
+                    diff: worker.diff.clone().unwrap_or_default(),
+                });
+                if let Some(VerificationState::Done { report }) =
+                    self.verification(&worker.id).await
+                {
+                    out.push(HarnessEvent::VerificationFinished {
+                        worker_id: worker.id.clone(),
+                        report,
+                    });
+                }
+            }
+            if let Some(landed) = self.landed.read().await.get(&worker.id) {
+                out.push(HarnessEvent::MergeLanded {
+                    worker_id: worker.id.clone(),
+                    branch: worker.branch.clone().unwrap_or_default(),
+                    commit: landed.commit.clone(),
+                    automatic: landed.automatic,
+                    risk: landed.risk,
+                });
+            }
+        }
+        out
     }
 
     /// Propose landing a worker's branch. Records the request and surfaces it; it does
@@ -1683,6 +1869,24 @@ impl Harness {
     /// Check a proposed merge: signals from the diff, the project's own commands in a
     /// fresh checkout, then an independent review. See [`crate::verify`].
     async fn verify(self: Arc<Self>, worker_id: String, branch: String) {
+        self.verify_attempt(worker_id, branch, 0).await
+    }
+
+    /// [`Harness::verify_attempt`] again, boxed: a future that spawns itself needs its
+    /// type spelled out somewhere, or the compiler cannot tell it is `Send`.
+    fn reverify(
+        self: Arc<Self>,
+        worker_id: String,
+        branch: String,
+        attempt: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(self.verify_attempt(worker_id, branch, attempt))
+    }
+
+    /// One pass of checks on a proposed merge. `attempt` counts the passes made because
+    /// the person's branch moved while an earlier one ran.
+    async fn verify_attempt(self: Arc<Self>, worker_id: String, branch: String, attempt: u32) {
+        use crate::isolation::MergedCheckout;
         use crate::verify::{self as v, Check, CheckKind, CheckStatus};
 
         self.record(HarnessEvent::VerificationStarted {
@@ -1714,11 +1918,50 @@ impl Harness {
         .await;
 
         // Only pay for a checkout (and its setup, e.g. `npm ci`) when something will use it.
+        // It is the branch merged with the checkout as it is now: what would land, not
+        // what the worker saw when it started.
+        let mut base: Option<String> = None;
         let checkout = if config.commands.is_empty() && config.reviewer.is_none() {
             None
         } else {
-            match self.workspaces.checkout_branch(&worker_id, &branch).await {
-                Ok(workspace) => Some(workspace),
+            match self.workspaces.checkout_merged(&worker_id, &branch).await {
+                Ok(MergedCheckout::Clean {
+                    workspace,
+                    base: merged_with,
+                }) => {
+                    base = Some(merged_with);
+                    Some(workspace)
+                }
+                Ok(MergedCheckout::Conflict {
+                    base: merged_with,
+                    files,
+                }) => {
+                    base = Some(merged_with);
+                    self.push_check(
+                        &worker_id,
+                        Check {
+                            kind: CheckKind::Command,
+                            name: "Merge".into(),
+                            status: CheckStatus::Failed,
+                            summary: format!(
+                                "no longer merges cleanly with your branch; {} changed on \
+                                 both sides: {}",
+                                if files.len() == 1 {
+                                    "this file"
+                                } else {
+                                    "these files"
+                                },
+                                files.join(", ")
+                            ),
+                            output: None,
+                            risk: None,
+                            findings: Vec::new(),
+                            reviewer: None,
+                        },
+                    )
+                    .await;
+                    None
+                }
                 Err(err) => {
                     self.push_check(
                         &worker_id,
@@ -1861,6 +2104,28 @@ impl Harness {
         // own. Still only a proposal that is pending — one they already merged or
         // discarded is left alone.
         if lands && self.pending_merges.read().await.contains_key(&worker_id) {
+            // The checks ran against the checkout as it was. If something landed since,
+            // that is not what they passed: check again before landing anything.
+            let moved = match (&base, self.workspaces.head().await) {
+                (Some(checked), Ok(now)) => *checked != now,
+                _ => false,
+            };
+            if moved {
+                if attempt < MAX_REVERIFY {
+                    self.verifications.write().await.insert(
+                        worker_id.clone(),
+                        VerificationState::Running { checks: Vec::new() },
+                    );
+                    tokio::spawn(Arc::clone(&self).reverify(worker_id, branch, attempt + 1));
+                } else {
+                    self.record(HarnessEvent::MergeNotLanded {
+                        worker_id,
+                        reason: "your branch kept changing while it was being checked".into(),
+                    })
+                    .await;
+                }
+                return;
+            }
             if let Err(err) = self.land(&worker_id, true).await {
                 self.record(HarnessEvent::MergeNotLanded {
                     worker_id,
@@ -2749,6 +3014,80 @@ impl Harness {
             .display()
             .to_string();
         self.store.lock().await.project_history(&key, limit)
+    }
+}
+
+/// How many times checks on one proposed merge are run again because the person's branch
+/// moved while they ran, before it is left for the person instead of landing by itself.
+const MAX_REVERIFY: u32 = 2;
+
+/// A worker from an earlier run of the app, put back together from its recorded events.
+/// `None` when nothing records it starting.
+fn restored_record(
+    worker_id: &str,
+    branch: &str,
+    history: &[HarnessEvent],
+) -> Option<WorkerRecord> {
+    let (role, task) = history.iter().rev().find_map(|e| match e {
+        HarnessEvent::WorkerSpawned { role, task, .. } => Some((role.clone(), task.clone())),
+        _ => None,
+    })?;
+    let finished = history.iter().rev().find_map(|e| match e {
+        HarnessEvent::WorkerFinished {
+            summary,
+            usage,
+            is_error,
+            ..
+        } => Some((summary.clone(), *usage, *is_error)),
+        _ => None,
+    });
+    let cancelled = history.iter().rev().find_map(|e| match e {
+        HarnessEvent::WorkerStatusChanged { status, .. } => Some(*status),
+        _ => None,
+    }) == Some(WorkerStatus::Cancelled);
+    let (summary, usage, is_error, status) = match finished {
+        Some((summary, usage, is_error)) => {
+            let status = if cancelled {
+                WorkerStatus::Cancelled
+            } else if is_error {
+                WorkerStatus::Failed
+            } else {
+                WorkerStatus::Done
+            };
+            (summary, usage, is_error, status)
+        }
+        None => (
+            "Meridian closed before this worker finished; what it had committed is on its \
+             branch."
+                .to_string(),
+            Usage::default(),
+            true,
+            WorkerStatus::Failed,
+        ),
+    };
+    Some(WorkerRecord {
+        id: worker_id.to_string(),
+        role,
+        status,
+        task,
+        summary,
+        usage,
+        diff: None,
+        branch: Some(branch.to_string()),
+        is_error,
+    })
+}
+
+/// What a worker stopped by its time limit reports.
+fn timed_out_outcome(minutes: u64) -> agents::RunOutcome {
+    agents::RunOutcome {
+        text: format!(
+            "Stopped after {minutes} minutes, the time limit for a worker \
+             (limits.worker_timeout_mins in roles.toml). Anything written so far was kept on \
+             its branch."
+        ),
+        is_error: true,
+        ..Default::default()
     }
 }
 

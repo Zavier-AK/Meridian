@@ -328,6 +328,40 @@ pub struct RoleRegistry {
     /// Checks run on a worker's branch before its merge is reviewed.
     #[serde(default)]
     pub verify: VerifyConfig,
+
+    /// How many workers run at once, and for how long.
+    #[serde(default)]
+    pub limits: Limits,
+}
+
+/// Rails on the fleet as a whole, so a burst of delegations or one hung CLI can't take
+/// over the machine or a subscription window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Limits {
+    /// Workers running at once; any more wait their turn as queued. Each one is a CLI
+    /// process, often a worktree setup, and a share of the same subscription.
+    #[serde(default = "default_max_parallel_workers")]
+    pub max_parallel_workers: usize,
+    /// Minutes a worker may run before it is stopped, what it wrote kept on its branch.
+    #[serde(default = "default_worker_timeout_mins")]
+    pub worker_timeout_mins: u64,
+}
+
+fn default_max_parallel_workers() -> usize {
+    4
+}
+
+fn default_worker_timeout_mins() -> u64 {
+    90
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_parallel_workers: default_max_parallel_workers(),
+            worker_timeout_mins: default_worker_timeout_mins(),
+        }
+    }
 }
 
 impl RoleRegistry {
@@ -368,6 +402,12 @@ impl RoleRegistry {
     fn validate(&self) -> Result<()> {
         if self.roles.is_empty() {
             bail!("role registry defines no roles");
+        }
+        if self.limits.max_parallel_workers == 0 {
+            bail!("limits.max_parallel_workers must be at least 1");
+        }
+        if self.limits.worker_timeout_mins == 0 {
+            bail!("limits.worker_timeout_mins must be greater than zero");
         }
 
         for (name, role) in &self.roles {

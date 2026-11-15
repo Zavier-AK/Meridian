@@ -45,6 +45,24 @@ pub const HEAD_GITHUB_READS: &[&str] = &[
     "Bash(gh api user)",
 ];
 
+/// Marks the folder Meridian opens at launch, so the head agent knows it is in the
+/// general home space rather than a project. Lives in `.harness/`, which git ignores.
+pub const HOME_MARKER: &str = ".harness/home";
+
+/// Whether `project_root` is Meridian's home folder.
+pub fn is_home(project_root: &Path) -> bool {
+    project_root.join(HOME_MARKER).is_file()
+}
+
+/// What the head agent is told when it runs in the home folder.
+pub const HOME_BRIEF: &str =
+    "\n\nWhere you are: Meridian's home space, the chat the person lands in \
+     when they open the app. It is not one of their projects; it is a folder of its own for \
+     whatever they ask that has no project yet. Answer questions directly here, and for \
+     something to be made (a script, a page, a small tool) delegate it as usual: it is \
+     built in this folder. When they talk about an existing project of theirs, tell them \
+     to open its folder with “Open a project” in the sidebar so the work happens there.";
+
 /// What the head agent is told about GitHub, from what `gh` can do on this machine.
 pub fn github_brief(state: crate::publish::GhState, login: Option<&str>) -> String {
     use crate::publish::GhState;
@@ -171,8 +189,11 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
          shows it on a board. Then end your turn. For a single piece of work, just \
          delegate it. A review, a question or an investigation is a single piece of work: \
          delegate it to one reviewer rather than planning it.\n\
-         - Use `delegate_async` plus `check_workers` when several pieces of work are \
-         independent, so they run in parallel.\n\
+         - Use `delegate_async` when several pieces of work are independent, so they run \
+         in parallel. You are sent a notice from Meridian as each one finishes; end your \
+         turn rather than polling, and pick the work up when the notice arrives.\n\
+         - Messages that begin \"[Automatic notice from Meridian\" come from the harness, \
+         not the person: act on them, and report to the person what matters.\n\
          - Workers that edit files run in their own git worktree. Their changes are NOT on \
          the user's branch. To land them, call `request_merge` — this only queues the diff \
          for the user to approve. Never tell the user work has landed unless \
@@ -285,6 +306,11 @@ async fn github_brief_for(project_root: &Path) -> String {
     }
 }
 
+/// How a harness notice reads to the head agent: plainly from Meridian, not the person.
+pub fn notice_text(text: &str) -> String {
+    format!("[Automatic notice from Meridian, not a message from the person] {text}")
+}
+
 /// A running head chat: the MCP server, the Claude process, and the event stream.
 pub struct Orchestrator {
     session: ClaudeSession,
@@ -356,6 +382,9 @@ impl Orchestrator {
             brief.push_str(&notes.head_context(project_root));
         }
         brief.push_str(&github_brief_for(project_root).await);
+        if is_home(project_root) {
+            brief.push_str(HOME_BRIEF);
+        }
 
         let run_id = format!("orchestrator-{}", harness.session_id());
         harness
@@ -437,6 +466,20 @@ impl Orchestrator {
         self.session.send_with_images(&message, &images).await
     }
 
+    /// Tell the head agent something on the harness's behalf — a background worker
+    /// finished, a plan ended, a check failed. Recorded as a [`HarnessEvent::HeadNotice`]
+    /// rather than a user message, so the chat never shows it as the person's words, and
+    /// marked in the text so the head agent doesn't take it as theirs either.
+    pub async fn notify(&mut self, text: &str) -> Result<()> {
+        self.harness
+            .record_head_event(HarnessEvent::HeadNotice {
+                run_id: self.session.run_id.clone(),
+                text: text.to_string(),
+            })
+            .await;
+        self.session.send(&notice_text(text)).await
+    }
+
     /// Stop the head agent's current turn. The conversation and the process survive,
     /// so the next message carries on from where it was stopped.
     pub async fn interrupt(&mut self) -> Result<()> {
@@ -447,6 +490,11 @@ impl Orchestrator {
             })
             .await;
         Ok(())
+    }
+
+    /// Whether the head agent's process has ended.
+    pub fn has_exited(&mut self) -> bool {
+        self.session.has_exited()
     }
 
     /// Requests from the head agent still waiting for the person.

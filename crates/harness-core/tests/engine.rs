@@ -81,13 +81,9 @@ async fn fixture_with(roles: &str) -> Fixture {
         .create_session("s1", None, &root.display().to_string())
         .unwrap();
 
-    let harness = Arc::new(Harness::new(
-        RoleRegistry::from_toml(roles).unwrap(),
-        Workspaces::new(root.clone()),
-        store,
-        "s1",
-        tx,
-    ));
+    let registry = RoleRegistry::from_toml(roles).unwrap();
+    let workspaces = Workspaces::with_setup(root.clone(), registry.worktree.clone());
+    let harness = Arc::new(Harness::new(registry, workspaces, store, "s1", tx));
 
     Fixture {
         harness,
@@ -390,7 +386,41 @@ async fn async_delegation_fans_out_and_results_are_collectable() {
         let record = f.harness.worker(id).await.unwrap();
         assert!(!record.is_error, "{record:?}");
         assert_eq!(record.diff.as_ref().unwrap().files_changed, 1);
+        // The head agent isn't waiting on these, so each one's ending is owed to it.
+        assert!(f.harness.take_reportable(id).await, "{id}");
     }
+    // One id per worker: the one handed back is the one it ran under, no aliases.
+    assert_eq!(f.harness.workers().await.len(), ids.len());
+}
+
+#[tokio::test]
+async fn a_worker_whose_workspace_cannot_be_made_fails_instead_of_preparing_forever() {
+    let mut f = fixture_with(
+        r#"
+[worktree]
+setup = ["exit 3"]
+
+[roles.builder]
+provider = "mock"
+isolation = "worktree"
+tools = ["Read", "Write"]
+"#,
+    )
+    .await;
+
+    let id = f
+        .harness
+        .delegate_async("builder", "WRITE:a.txt:a", vec![])
+        .await
+        .unwrap();
+    let record = finished(&f, &id).await;
+    assert_eq!(record.status, WorkerStatus::Failed);
+    assert!(record.summary.contains("exit 3"), "{}", record.summary);
+    let finishes = drain(&mut f.events)
+        .into_iter()
+        .filter(|e| matches!(e, HarnessEvent::WorkerFinished { worker_id, .. } if worker_id == &id))
+        .count();
+    assert_eq!(finishes, 1, "said once");
 }
 
 #[tokio::test]
@@ -1285,10 +1315,10 @@ async fn under_ask_a_delegation_waits_and_runs_the_task_the_person_approved() {
     assert_eq!(record.status, WorkerStatus::Done);
     assert_eq!(record.diff.unwrap().files, ["edited.txt"]);
     assert!(
-        f.harness.take_approved(&id).await,
+        f.harness.take_reportable(&id).await,
         "its outcome is owed to the head agent"
     );
-    assert!(!f.harness.take_approved(&id).await, "once");
+    assert!(!f.harness.take_reportable(&id).await, "once");
     assert!(
         f.harness.approve_delegation(&id, None).await.is_err(),
         "approval is single-use"
@@ -2145,4 +2175,195 @@ async fn notes_are_refused_while_off_and_every_write_is_shown() {
         .write_note("me.md", "x", harness_core::notes::WriteMode::Replace)
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn the_head_agents_cli_waits_longer_than_five_minutes_on_a_delegation() {
+    let fx = fixture().await;
+    let server = harness_core::mcp::serve(Arc::clone(&fx.harness))
+        .await
+        .unwrap();
+    let config: serde_json::Value = serde_json::from_str(&server.claude_mcp_config()).unwrap();
+    let timeout = config["mcpServers"]["harness"]["timeout"]
+        .as_u64()
+        .expect("a timeout on the harness server");
+    // Claude Code drops an HTTP tool call quiet for five minutes unless the server sets
+    // its own timeout; a synchronous `delegate` is quiet until its worker finishes.
+    assert!(timeout >= 60 * 60 * 1000, "{timeout}ms");
+    server.shutdown().await;
+}
+
+/// A second run of the app on the same repository and database: the first one's
+/// in-memory state is gone, only its branches and event log remain.
+async fn reopen(root: &std::path::Path, db: &std::path::Path, session: &str) -> Arc<Harness> {
+    let (tx, _events) = tokio::sync::mpsc::unbounded_channel();
+    let store = Store::open(db).unwrap();
+    store
+        .create_session(session, None, &root.display().to_string())
+        .unwrap();
+    Arc::new(Harness::new(
+        RoleRegistry::from_toml(ROLES).unwrap(),
+        Workspaces::new(root.to_path_buf()),
+        store,
+        session,
+        tx,
+    ))
+}
+
+#[tokio::test]
+async fn work_waiting_for_review_survives_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]).await;
+    git(&root, &["config", "user.email", "harness@test"]).await;
+    git(&root, &["config", "user.name", "Harness Test"]).await;
+    std::fs::write(root.join("README.md"), "base\n").unwrap();
+    git(&root, &["add", "-A"]).await;
+    git(&root, &["commit", "-q", "-m", "init"]).await;
+    let db = dir.path().join("sessions.db");
+
+    let (proposed, kept, landed) = {
+        let first = reopen(&root, &db, "s1").await;
+        let proposed = first
+            .delegate("local_builder", "WRITE:proposed.txt:p", vec![])
+            .await
+            .unwrap();
+        first.request_merge(&proposed.id).await.unwrap();
+        let kept = first
+            .delegate("local_builder", "WRITE:kept.txt:k", vec![])
+            .await
+            .unwrap();
+        let landed = first
+            .delegate("local_builder", "WRITE:landed.txt:l", vec![])
+            .await
+            .unwrap();
+        first.request_merge(&landed.id).await.unwrap();
+        // Let its checks settle, then land it.
+        for _ in 0..100 {
+            if first.verifications_running().await == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        first.approve_merge(&landed.id).await.unwrap();
+        (proposed.id, kept.id, landed.id)
+    };
+
+    let second = reopen(&root, &db, "s2").await;
+    assert!(second.workers().await.is_empty());
+    assert_eq!(second.restore().await.unwrap(), 2);
+
+    let back = second.worker(&proposed).await.expect("the proposed worker");
+    assert_eq!(back.status, WorkerStatus::Done);
+    assert_eq!(back.diff.unwrap().files, ["proposed.txt"]);
+    let pending: Vec<String> = second
+        .pending_merges()
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        pending,
+        std::slice::from_ref(&proposed),
+        "still waiting for review"
+    );
+    assert!(
+        second.worker(&kept).await.is_some(),
+        "finished, never proposed"
+    );
+    assert!(
+        second.worker(&landed).await.is_none(),
+        "already in the checkout"
+    );
+
+    // It can be landed from the new session, as if nothing had happened.
+    second.approve_merge(&proposed).await.unwrap();
+    assert!(root.join("proposed.txt").exists());
+
+    // The window replays the same picture from a snapshot, and a second restore
+    // brings back nothing twice.
+    let snapshot = second.snapshot_events().await;
+    assert!(snapshot.iter().any(
+        |e| matches!(e, HarnessEvent::WorkerSpawned { worker_id, number, .. } if worker_id == &kept && *number > 0)
+    ));
+    assert_eq!(second.restore().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_change_that_no_longer_merges_fails_its_checks_and_waits() {
+    let mut f = fixture_with(&passing_verify()).await;
+    f.harness.set_autonomy(Autonomy::LandMost).await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:README.md:from the worker", vec![])
+        .await
+        .unwrap();
+    // The same file changes on the person's branch before the change is proposed.
+    std::fs::write(f.root.join("README.md"), "from the person\n").unwrap();
+    git(&f.root, &["commit", "-q", "-am", "edit"]).await;
+
+    f.harness.request_merge(&record.id).await.unwrap();
+    let (_, report) = verification_of(&mut f, &record.id).await;
+    let merge = report
+        .checks
+        .iter()
+        .find(|c| c.name == "Merge")
+        .expect("a merge check");
+    assert!(merge.summary.contains("README.md"), "{}", merge.summary);
+    assert_eq!(report.risk, harness_core::verify::Risk::High);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(
+        f.harness.pending_merges().await.len(),
+        1,
+        "left for the person, never landed by itself"
+    );
+}
+
+#[tokio::test]
+async fn workers_past_the_parallel_limit_wait_their_turn() {
+    let f = fixture_with(&format!("{ROLES}\n[limits]\nmax_parallel_workers = 1\n")).await;
+    let slow = f
+        .harness
+        .delegate_async("local_builder", "SLOW:a.txt:a", vec![])
+        .await
+        .unwrap();
+    let next = f
+        .harness
+        .delegate_async("local_builder", "WRITE:b.txt:b", vec![])
+        .await
+        .unwrap();
+
+    // The first takes the only slot; the second stays queued behind it.
+    for _ in 0..100 {
+        if f.harness.worker(&slow).await.unwrap().status == WorkerStatus::Running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        f.harness.worker(&next).await.unwrap().status,
+        WorkerStatus::Queued
+    );
+
+    // Once the first is done, the second runs.
+    assert!(f.harness.cancel_worker(&slow).await);
+    let record = finished(&f, &next).await;
+    assert_eq!(record.status, WorkerStatus::Done);
+}
+
+#[test]
+fn limits_must_leave_room_to_work() {
+    for bad in [
+        "[limits]\nmax_parallel_workers = 0\n",
+        "[limits]\nworker_timeout_mins = 0\n",
+    ] {
+        assert!(
+            RoleRegistry::from_toml(&format!("{ROLES}\n{bad}")).is_err(),
+            "{bad}"
+        );
+    }
+    let defaults = RoleRegistry::from_toml(ROLES).unwrap().limits;
+    assert!(defaults.max_parallel_workers >= 2 && defaults.worker_timeout_mins >= 30);
 }

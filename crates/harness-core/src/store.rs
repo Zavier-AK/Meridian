@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS usage (
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_usage_window   ON usage(provider, at);
 CREATE INDEX IF NOT EXISTS idx_runs_session   ON runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_stream  ON events(stream_key, id);
 "#;
 
 pub struct Store {
@@ -282,7 +283,7 @@ impl Store {
              JOIN sessions ON sessions.id = events.session_id \
              WHERE sessions.project_root = ?1 \
                AND json_extract(events.payload, '$.type') IN \
-                   ('user_message', 'assistant_text', 'tool_call', 'turn_interrupted', 'run_finished', 'error') \
+                   ('user_message', 'head_notice', 'assistant_text', 'tool_call', 'turn_interrupted', 'run_finished', 'error') \
              ORDER BY events.id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_root, limit as i64], |row| {
@@ -294,6 +295,23 @@ impl Store {
             out.push(serde_json::from_str(&row?)?);
         }
         out.reverse();
+        Ok(out)
+    }
+
+    /// Everything recorded about one worker, from whichever session ran it, oldest
+    /// first. How a worker from an earlier run of the app is put back together.
+    pub fn worker_history(&self, worker_id: &str) -> Result<Vec<HarnessEvent>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT payload FROM events WHERE stream_key = ?1 ORDER BY id")?;
+        let rows = stmt.query_map(params![worker_id], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            // An event this version no longer knows is skipped, not fatal.
+            if let Ok(event) = serde_json::from_str(&row?) {
+                out.push(event);
+            }
+        }
         Ok(out)
     }
 
