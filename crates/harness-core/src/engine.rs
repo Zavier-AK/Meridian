@@ -2236,6 +2236,38 @@ impl Harness {
         if crate::revise::is_empty(note, comments) {
             bail!("say what should change — a comment or a note");
         }
+        self.revise_with(worker_id, crate::revise::feedback(note, comments))
+            .await
+    }
+
+    /// The head agent sends a finished worker's change back, typically after its checks
+    /// failed: the same pass as [`Harness::revise`], briefed as coming from the head
+    /// agent rather than the person, and capped so the two cannot loop forever. Its
+    /// outcome is reported to the head agent when it finishes.
+    pub async fn revise_from_head(
+        self: &Arc<Self>,
+        worker_id: &str,
+        feedback: &str,
+    ) -> Result<u32> {
+        if feedback.trim().is_empty() {
+            bail!("say what should change");
+        }
+        let done = self.revision_count(worker_id).await;
+        if done >= MAX_HEAD_REVISIONS {
+            bail!(
+                "this change has been sent back {done} times already; tell the person what is \
+                 still wrong and let them decide, rather than sending it back again"
+            );
+        }
+        let revision = self
+            .revise_with(worker_id, crate::revise::head_feedback(feedback))
+            .await?;
+        self.approved.write().await.insert(worker_id.to_string());
+        Ok(revision)
+    }
+
+    /// [`Harness::revise`] with the brief already written.
+    async fn revise_with(self: &Arc<Self>, worker_id: &str, feedback: String) -> Result<u32> {
         let record = self
             .worker(worker_id)
             .await
@@ -2276,7 +2308,6 @@ impl Harness {
         self.pending_merges.write().await.remove(worker_id);
         self.verifications.write().await.remove(worker_id);
 
-        let feedback = crate::revise::feedback(note, comments);
         let resume = if role.provider.runs_claude_cli() {
             self.store
                 .lock()
@@ -3016,6 +3047,10 @@ impl Harness {
         self.store.lock().await.project_history(&key, limit)
     }
 }
+
+/// How many times the head agent may send one change back by itself. Past this, what is
+/// still wrong is the person's call.
+const MAX_HEAD_REVISIONS: u32 = 2;
 
 /// How many times checks on one proposed merge are run again because the person's branch
 /// moved while they ran, before it is left for the person instead of landing by itself.

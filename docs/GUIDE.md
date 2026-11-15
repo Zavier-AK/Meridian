@@ -71,6 +71,7 @@ a first-class tool call:
 | `check_workers` | A short status of workers still running and the latest finished |
 | `collect` | Read a finished worker's result and diff |
 | `request_merge` | **Propose** landing a branch — never lands it |
+| `revise` | Send a finished worker's change back to it, on the same branch, with what to fix (at most twice per change) |
 
 Nothing has to poll. When a worker started with `delegate_async` (or one you approved under
 *Ask*) finishes, Meridian sends the head agent a notice with how it went. The chat shows

@@ -199,6 +199,9 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
          for the user to approve. Never tell the user work has landed unless \
          `check_workers` says it did (they may let verified, low-risk changes land by \
          themselves); otherwise tell them it is waiting for their review.\n\
+         - When a finished worker's checks fail or its result misses something, send it \
+         back to the same worker with `revise` and exactly what to fix, rather than \
+         delegating a fresh worker that would start without its change.\n\
          - The user decides how much runs without them. A delegation that comes back \
          `awaiting_approval` starts once they approve it, and you will be told how it \
          ends; do not wait or poll for it.\n\
@@ -610,13 +613,13 @@ mod tests {
 
     #[test]
     fn tool_surface_stays_small_to_keep_the_context_floor_down() {
-        // Three read tools plus eleven harness tools (the six delegation tools,
+        // Three read tools plus twelve harness tools (the six delegation tools, `revise`,
         // `propose_plan`, search/read/write for notes, and `screenshot`). If this grows, the
         // per-session floor grows with it, so the assertion is a tripwire rather than
         // trivia.
         // The GitHub read rules are permissions for `Bash`, not tools of their own.
         let tools = orchestrator_role(None, None).effective_tools();
-        assert_eq!(tools.iter().filter(|t| !t.starts_with("Bash(")).count(), 14);
+        assert_eq!(tools.iter().filter(|t| !t.starts_with("Bash(")).count(), 15);
     }
 
     #[test]

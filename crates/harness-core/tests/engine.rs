@@ -2367,3 +2367,42 @@ fn limits_must_leave_room_to_work() {
     let defaults = RoleRegistry::from_toml(ROLES).unwrap().limits;
     assert!(defaults.max_parallel_workers >= 2 && defaults.worker_timeout_mins >= 30);
 }
+
+#[tokio::test]
+async fn the_head_agent_can_send_a_change_back_twice_and_hears_how_it_went() {
+    let f = fixture().await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:a.txt:one", vec![])
+        .await
+        .unwrap();
+    f.harness.request_merge(&record.id).await.unwrap();
+    checks_settle(&f.harness, &record.id).await;
+
+    for n in 1..=2u32 {
+        let revision = f
+            .harness
+            .revise_from_head(&record.id, &format!("MOCK-SH:echo {n} > fix{n}.txt"))
+            .await
+            .unwrap();
+        assert_eq!(revision, n);
+        let after = finished(&f, &record.id).await;
+        assert!(after
+            .diff
+            .as_ref()
+            .unwrap()
+            .files
+            .contains(&format!("fix{n}.txt")));
+        assert!(
+            f.harness.take_reportable(&record.id).await,
+            "the head agent is told when its revision finishes"
+        );
+        checks_settle(&f.harness, &record.id).await;
+    }
+    let err = f
+        .harness
+        .revise_from_head(&record.id, "once more")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("sent back 2 times"), "{err}");
+}

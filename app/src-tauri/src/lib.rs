@@ -341,8 +341,8 @@ async fn tell_head_about_failed_checks(
     }
     let notice = format!(
         "Checks on {worker_id}'s proposed merge failed ({}): {}. The person has not merged \
-         it. If you can fix it, delegate a fix with these findings and propose that instead; \
-         otherwise say why it should land as it is.",
+         it. If it can be fixed, send it back to the same worker with `revise` and these \
+         findings; otherwise tell the person why it should land as it is.",
         failed.join(", "),
         report.reasons.join("; ")
     );
