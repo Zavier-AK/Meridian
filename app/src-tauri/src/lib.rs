@@ -2430,6 +2430,51 @@ async fn role_tools(
     Ok(describe_role_tools(&registry))
 }
 
+/// The project's checks and limits, for the panel, with the roles a reviewer can be.
+#[derive(Serialize)]
+struct ChecksView {
+    checks: harness_core::roles_patch::ChecksPatch,
+    roles: Vec<String>,
+}
+
+#[tauri::command]
+async fn checks_settings(
+    state: State<'_, AppState>,
+    project_root: String,
+) -> Result<ChecksView, String> {
+    let file = roles_file_for(&state, &project_root).await;
+    let registry = RoleRegistry::load(&file).map_err(describe_error)?;
+    Ok(ChecksView {
+        checks: harness_core::roles_patch::ChecksPatch::from_registry(&registry),
+        roles: registry.roles.keys().cloned().collect(),
+    })
+}
+
+/// Write `[verify]` and `[limits]` into `roles.toml`, and apply them to the open session
+/// (the parallel limit takes effect when the project is next opened).
+#[tauri::command]
+async fn save_checks_settings(
+    state: State<'_, AppState>,
+    project_root: String,
+    checks: harness_core::roles_patch::ChecksPatch,
+) -> Result<ChecksView, String> {
+    let file = roles_file_for(&state, &project_root).await;
+    harness_core::roles_patch::apply_checks_patch_file(&file, &checks).map_err(describe_error)?;
+    let updated = RoleRegistry::load(&file).map_err(describe_error)?;
+    if let Some(session) = state
+        .projects
+        .lock()
+        .await
+        .get_mut(&project_key(&project_root))
+    {
+        session.harness.swap_registry(updated.clone()).await;
+    }
+    Ok(ChecksView {
+        checks: harness_core::roles_patch::ChecksPatch::from_registry(&updated),
+        roles: updated.roles.keys().cloned().collect(),
+    })
+}
+
 /// Rewrite one role's allow-list in `roles.toml`, and apply it to the open session.
 #[tauri::command]
 async fn save_role_tools(
@@ -2521,6 +2566,8 @@ pub fn run() {
             open_home,
             worker_snapshot,
             new_conversation,
+            checks_settings,
+            save_checks_settings,
             answer_permission,
             revise_worker,
             changes_overview,

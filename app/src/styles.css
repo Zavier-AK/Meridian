@@ -1876,3 +1876,13 @@ button.shot-lightbox-close {
 /* At the right end of the pane tabs, only on Chat once there is a conversation. */
 .pane-tabs .new-conversation { margin-left: auto; font-size: 12px; padding: 4px 10px; color: var(--muted); background: transparent; border: 1px solid color-mix(in srgb, var(--text) 12%, transparent); border-radius: 8px; }
 .pane-tabs .new-conversation:hover:not(:disabled) { color: var(--text); }
+
+/* Checks and limits, under the fleet. */
+.checks-panel { margin-top: 22px; padding-top: 16px; border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent); display: flex; flex-direction: column; gap: 8px; }
+.checks-panel h3 { margin: 6px 0 0; font-size: 14px; }
+.checks-panel p { margin: 0; }
+.checks-panel textarea { width: 100%; resize: vertical; }
+.checks-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.checks-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.checks-row input { width: 110px; }
+.checks-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }

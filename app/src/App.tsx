@@ -369,6 +369,23 @@ export default function App() {
   async function changeAutonomy(level: Autonomy) {
     try {
       setAutonomy(await invoke<Autonomy>("set_autonomy", { level }));
+      // Landing by itself trusts the checks; with none set up, it would never happen.
+      if ((level === "land_safe" || level === "land_most") && session) {
+        const view = await invoke<{ checks: { commands: string[]; reviewer: string | null } }>(
+          "checks_settings",
+          { projectRoot: session.project_root },
+        ).catch(() => null);
+        if (view && view.checks.commands.length === 0 && !view.checks.reviewer) {
+          setChat((prev) => [
+            ...prev,
+            {
+              kind: "notice",
+              tone: "warn",
+              text: "Nothing checks changes in this project yet, so nothing will land by itself. Add a test command or a reviewer under Change fleet › Checks before merge.",
+            },
+          ]);
+        }
+      }
     } catch (err) {
       setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]);
     }
