@@ -576,6 +576,8 @@ export default function App() {
       if (payload.type === "turn_interrupted") setBusy(false);
       // Meridian told the head agent something (a worker finished): that starts a turn.
       if (payload.type === "head_notice" && payload.run_id === headRun.current) setBusy(true);
+      // Its process died mid-turn: nothing more is coming for that turn.
+      if (payload.type === "head_exited" && payload.run_id === headRun.current) setBusy(false);
       if (payload.type === "plan_updated") {
         const incoming = payload.plan;
         setPlan((current) => {

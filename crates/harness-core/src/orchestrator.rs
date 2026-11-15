@@ -492,6 +492,11 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Whether the head agent's process has ended.
+    pub fn has_exited(&mut self) -> bool {
+        self.session.has_exited()
+    }
+
     /// Requests from the head agent still waiting for the person.
     pub fn pending_permissions(&self) -> Vec<String> {
         self.session.pending_permissions()

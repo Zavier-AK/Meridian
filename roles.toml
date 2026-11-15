@@ -82,6 +82,20 @@ commands = []
 # timeout_secs = 900
 
 # ---------------------------------------------------------------------------
+# Limits on the fleet as a whole.
+#
+#   max_parallel_workers — workers running at once; more wait their turn as
+#                          queued. Each is a CLI process and a share of the
+#                          same subscription.
+#   worker_timeout_mins  — a worker running longer is stopped, and what it
+#                          wrote is kept on its branch to review.
+# ---------------------------------------------------------------------------
+
+[limits]
+max_parallel_workers = 4
+worker_timeout_mins  = 90
+
+# ---------------------------------------------------------------------------
 # Claude Pro — rare, high-value calls.
 # ---------------------------------------------------------------------------
 

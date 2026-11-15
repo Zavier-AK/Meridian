@@ -97,6 +97,9 @@ pub struct AppState {
 struct Session {
     harness: Arc<Harness>,
     head: Head,
+    /// When the head agent last started, so one that dies again straight away is not
+    /// restarted in a loop.
+    head_started: std::time::Instant,
     project_root: PathBuf,
     roles_file: PathBuf,
     model: Option<String>,
@@ -273,6 +276,21 @@ fn forward_events(
                          settled something a later session would need, note it with notes_write."
                     ))
                     .await;
+                }
+                HarnessEvent::HeadExited { run_id } => {
+                    let message = head_exited(&app, &project).await;
+                    if !message.is_empty() {
+                        let _ = app.emit(
+                            EVENT_CHANNEL,
+                            ProjectEvent {
+                                project: &project,
+                                event: &HarnessEvent::Error {
+                                    run_id: run_id.clone(),
+                                    message,
+                                },
+                            },
+                        );
+                    }
                 }
                 HarnessEvent::DelegationDeclined { worker_id, reason } => {
                     tell_head(
@@ -663,28 +681,7 @@ async fn start_session(
         let mut projects = state.projects.lock().await;
         if let Some(session) = projects.get_mut(&key) {
             if !session.is_live() {
-                load_extras(&session.harness).await;
-                let (orchestrator, events) = Orchestrator::start(
-                    Arc::clone(&session.harness),
-                    &session.project_root,
-                    session.model.clone(),
-                    Some(settings::load().max_turns),
-                    session
-                        .harness
-                        .resumable_backend_session()
-                        .await
-                        .map_err(|e| format!("{e:#}"))?,
-                    hook_command(),
-                )
-                .await
-                .map_err(|e| format!("{e:#}"))?;
-                forward_events(
-                    app.clone(),
-                    Arc::clone(&session.harness),
-                    key.clone(),
-                    events,
-                );
-                session.head = Head::Live(Box::new(orchestrator));
+                relaunch_head(&app, &key, session).await?;
             }
             let info = describe(&key, session).await;
             drop(projects);
@@ -798,6 +795,7 @@ async fn start_session(
         Session {
             harness,
             head: Head::Live(Box::new(orchestrator)),
+            head_started: std::time::Instant::now(),
             project_root: project,
             roles_file,
             model: model.clone(),
@@ -1559,6 +1557,11 @@ async fn reconnect_head(
     let session = projects
         .get_mut(&key)
         .ok_or("no session for that project")?;
+    relaunch_head(&app, &key, session).await
+}
+
+/// Shut the head agent down if it is up, and start it again on the same conversation.
+async fn relaunch_head(app: &AppHandle, key: &str, session: &mut Session) -> Result<(), String> {
     if let Head::Live(orchestrator) = std::mem::replace(&mut session.head, Head::Suspended) {
         if let Err(error) = orchestrator.shutdown().await {
             tracing::warn!("head agent did not shut down cleanly: {error:#}");
@@ -1580,9 +1583,53 @@ async fn reconnect_head(
     )
     .await
     .map_err(|e| format!("{e:#}"))?;
-    forward_events(app, Arc::clone(&session.harness), key, events);
+    forward_events(
+        app.clone(),
+        Arc::clone(&session.harness),
+        key.to_string(),
+        events,
+    );
     session.head = Head::Live(Box::new(orchestrator));
+    session.head_started = std::time::Instant::now();
     Ok(())
+}
+
+/// A head agent shorter-lived than this that dies is not restarted again by itself.
+const HEAD_RESTART_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The head agent's process ended on its own. Start it again on the same conversation,
+/// once: one that dies again right after starting is left for the person, with a notice
+/// saying so, rather than restarted in a loop. Returns what to tell the person.
+async fn head_exited(app: &AppHandle, project: &str) -> String {
+    let state = app.state::<AppState>();
+    let mut projects = state.projects.lock().await;
+    let Some(session) = projects.get_mut(project) else {
+        return String::new();
+    };
+    // Only the head agent that is meant to be up: one shut down on purpose, or already
+    // replaced by a fresh one, is nothing to recover.
+    let Head::Live(orchestrator) = &mut session.head else {
+        return String::new();
+    };
+    if !orchestrator.has_exited() {
+        return String::new();
+    }
+    if session.head_started.elapsed() < HEAD_RESTART_GRACE {
+        session.head = Head::Suspended;
+        return "The head agent stopped again just after starting, so Meridian left it off. \
+                Check that `claude` runs in a terminal, then use Reconnect in Settings › \
+                Claude sign-in."
+            .into();
+    }
+    match relaunch_head(app, project, session).await {
+        Ok(()) => "The head agent stopped unexpectedly. Meridian restarted it on the same \
+                   conversation; whatever it was doing when it stopped did not finish, so ask \
+                   again if it matters."
+            .into(),
+        Err(error) => {
+            format!("The head agent stopped unexpectedly and could not be restarted: {error}")
+        }
+    }
 }
 
 /// Open a pull request's page.
@@ -1958,24 +2005,7 @@ async fn focus_project(
 
     let session = projects.get_mut(&key).ok_or("that project is not open")?;
     if !session.is_live() {
-        load_extras(&session.harness).await;
-        let resume = session
-            .harness
-            .resumable_backend_session()
-            .await
-            .map_err(|e| format!("{e:#}"))?;
-        let (orchestrator, events) = Orchestrator::start(
-            Arc::clone(&session.harness),
-            &session.project_root,
-            session.model.clone(),
-            Some(settings::load().max_turns),
-            resume,
-            hook_command(),
-        )
-        .await
-        .map_err(|e| format!("{e:#}"))?;
-        forward_events(app, Arc::clone(&session.harness), key.clone(), events);
-        session.head = Head::Live(Box::new(orchestrator));
+        relaunch_head(&app, &key, session).await?;
     }
 
     let info = describe(&key, session).await;

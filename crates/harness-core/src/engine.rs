@@ -74,6 +74,9 @@ pub struct Harness {
     verifications: RwLock<HashMap<String, VerificationState>>,
     /// Verification runs tests and possibly a local model, both heavy; one at a time.
     verify_slots: Arc<tokio::sync::Semaphore>,
+    /// Workers running at once, from `limits.max_parallel_workers` when the session
+    /// started; the rest wait as queued.
+    worker_slots: Arc<tokio::sync::Semaphore>,
     /// How much runs without the person. See [`crate::autonomy`].
     autonomy: RwLock<crate::autonomy::Autonomy>,
     /// Delegations waiting for the person's approval, keyed by worker id.
@@ -146,7 +149,11 @@ impl Harness {
         session_id: impl Into<String>,
         events: EventSink,
     ) -> Self {
+        let worker_slots = Arc::new(tokio::sync::Semaphore::new(
+            registry.limits.max_parallel_workers,
+        ));
         Self {
+            worker_slots,
             registry: RwLock::new(registry),
             workspaces,
             store: Mutex::new(store),
@@ -666,6 +673,14 @@ impl Harness {
         })
         .await;
 
+        // At most so many run at once; the rest stay queued until one finishes. Stopping a
+        // queued worker stops the wait too.
+        let _slot = tokio::select! {
+            permit = Arc::clone(&self.worker_slots).acquire_owned() => permit.ok(),
+            _ = stopped.wait_for(|stop| *stop) => None,
+        };
+        let timeout_mins = self.registry.read().await.limits.worker_timeout_mins;
+
         // Shared-mode workers queue behind each other; say so rather than looking hung.
         if role.isolation == crate::roles::Isolation::Shared {
             self.set_status(&worker_id, WorkerStatus::Blocked).await;
@@ -744,6 +759,11 @@ impl Harness {
             tokio::select! {
                 outcome = agents::run_worker(&spec, &self.events) => outcome,
                 _ = stopped.wait_for(|stop| *stop) => Ok(stopped_outcome()),
+                // A CLI that hangs would otherwise hold its slot, and its worktree, for
+                // good. Dropping the future kills it, as a stop does.
+                _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_mins * 60)) => {
+                    Ok(timed_out_outcome(timeout_mins))
+                }
             }
         };
         self.cancels.write().await.remove(&worker_id);
@@ -3056,6 +3076,19 @@ fn restored_record(
         branch: Some(branch.to_string()),
         is_error,
     })
+}
+
+/// What a worker stopped by its time limit reports.
+fn timed_out_outcome(minutes: u64) -> agents::RunOutcome {
+    agents::RunOutcome {
+        text: format!(
+            "Stopped after {minutes} minutes, the time limit for a worker \
+             (limits.worker_timeout_mins in roles.toml). Anything written so far was kept on \
+             its branch."
+        ),
+        is_error: true,
+        ..Default::default()
+    }
 }
 
 /// What a stopped worker reports. Worded for the head agent as much as the person: it

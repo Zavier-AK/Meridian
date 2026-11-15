@@ -40,7 +40,7 @@ Verified against live docs and against the real CLI, not assumed.
 | `--permission-prompt-tool stdio` sends each unapproved tool use to the host as a `can_use_tool` control request, and waits for a `control_response` | The head agent asks in the chat instead of being refused. Verified live: allow ran the command, "always" returned an `addRules` rule for the session, deny was reported back by the model, and Stop while a request waited ended the turn cleanly. |
 | A head agent with `Bash` copied a subagent's work straight into the checkout, skipping review | The brief and subagent preamble now say outright that absence from the checkout is correct. |
 | `--plugin-dir` loads skills as `plugin:name` in headless mode | Skills reach workers without writing anything into the user's repository. |
-| Claude Code abandons an HTTP MCP tool call that is silent for ~5 minutes | Approval under the autonomy slider's **Ask** returns at once instead of blocking. The same limit threatens a synchronous `delegate` of a worker that runs longer — see known gaps. |
+| Claude Code abandons an HTTP MCP tool call that is silent for ~5 minutes | Approval under the autonomy slider's **Ask** returns at once instead of blocking. The harness server's entry sets a three-hour `timeout`, which also raises that idle floor, so a long synchronous `delegate` is no longer dropped. |
 | A `PreToolUse` hook's `permissionDecision: "deny"` on the `Agent` tool is honoured in `-p` mode | Ask is enforced on native subagents too: live, the head agent was refused `Agent` and fell back to `delegate`. |
 | `--mcp-config` takes several values | Placed last on a worker's argv, it swallows the prompt; extras go first. |
 | `pi-herdr` drives terminal panes and scrapes them | Wrong substrate for a GUI, and bound to the `pi` agent. Not forked; its preset/spawn concept borrowed, engine written fresh. |
@@ -381,19 +381,12 @@ output can merge anything.
 
 ### Known gaps
 
-- **No CI.** The repository has no workflows, so the 275 tests run only by hand. This
-  matters more than usual here: both CLIs' JSON output is parsed leniently against
-  fixtures rather than a stable contract, so upstream schema drift would go unnoticed
-  until a live run misbehaved. Deferred by choice.
 - **No auth-mode readout**, per the CLI finding above.
 - **Native subagent definitions are fixed per session.** Reassigning a native role, or
   editing its tools, reaches it through `delegate` until the project is reopened; the head
   agent is told so.
 - **Skill and MCP changes reach a running head agent only on reopen.** Workers get them on
   their next task.
-- **A synchronous `delegate` longer than ~5 minutes may be abandoned** by Claude Code's
-  MCP idle timeout. `delegate_async` and native subagents are unaffected. Fix: send
-  progress notifications from the MCP server during long calls.
 - **Diff drawer shows the current diff, not a history** of earlier ones. The chat itself
   is restored on restart and on switching projects.
 
@@ -441,7 +434,6 @@ In the order that unblocks the most.
 11. **Run a night shift on something real** with a score you trust: a benchmark, a
    bundle size, a test count. Start with a few experiments and read the report before
    giving it a whole night.
-12. **Add CI** when the schema-drift risk starts to bite.
 
 ## Risks worth tracking
 

@@ -67,7 +67,9 @@ export type HarnessEvent =
     }
   | { type: "user_message"; run_id: string; text: string; attachments?: string[] }
   /** Something Meridian told the head agent on its own: a worker finished, a plan ended. */
-  | { type: "head_notice"; run_id: string; text: string };
+  | { type: "head_notice"; run_id: string; text: string }
+  /** The head agent's process ended on its own; its turn is over. */
+  | { type: "head_exited"; run_id: string };
 
 /** Mirrors `harness_core::isolation::Patch`. */
 export type Patch = {

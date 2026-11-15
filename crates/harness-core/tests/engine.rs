@@ -2319,3 +2319,51 @@ async fn a_change_that_no_longer_merges_fails_its_checks_and_waits() {
         "left for the person, never landed by itself"
     );
 }
+
+#[tokio::test]
+async fn workers_past_the_parallel_limit_wait_their_turn() {
+    let f = fixture_with(&format!("{ROLES}\n[limits]\nmax_parallel_workers = 1\n")).await;
+    let slow = f
+        .harness
+        .delegate_async("local_builder", "SLOW:a.txt:a", vec![])
+        .await
+        .unwrap();
+    let next = f
+        .harness
+        .delegate_async("local_builder", "WRITE:b.txt:b", vec![])
+        .await
+        .unwrap();
+
+    // The first takes the only slot; the second stays queued behind it.
+    for _ in 0..100 {
+        if f.harness.worker(&slow).await.unwrap().status == WorkerStatus::Running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        f.harness.worker(&next).await.unwrap().status,
+        WorkerStatus::Queued
+    );
+
+    // Once the first is done, the second runs.
+    assert!(f.harness.cancel_worker(&slow).await);
+    let record = finished(&f, &next).await;
+    assert_eq!(record.status, WorkerStatus::Done);
+}
+
+#[test]
+fn limits_must_leave_room_to_work() {
+    for bad in [
+        "[limits]\nmax_parallel_workers = 0\n",
+        "[limits]\nworker_timeout_mins = 0\n",
+    ] {
+        assert!(
+            RoleRegistry::from_toml(&format!("{ROLES}\n{bad}")).is_err(),
+            "{bad}"
+        );
+    }
+    let defaults = RoleRegistry::from_toml(ROLES).unwrap().limits;
+    assert!(defaults.max_parallel_workers >= 2 && defaults.worker_timeout_mins >= 30);
+}
