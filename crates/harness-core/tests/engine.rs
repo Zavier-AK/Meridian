@@ -2192,3 +2192,96 @@ async fn the_head_agents_cli_waits_longer_than_five_minutes_on_a_delegation() {
     assert!(timeout >= 60 * 60 * 1000, "{timeout}ms");
     server.shutdown().await;
 }
+
+/// A second run of the app on the same repository and database: the first one's
+/// in-memory state is gone, only its branches and event log remain.
+async fn reopen(root: &std::path::Path, db: &std::path::Path, session: &str) -> Arc<Harness> {
+    let (tx, _events) = tokio::sync::mpsc::unbounded_channel();
+    let store = Store::open(db).unwrap();
+    store
+        .create_session(session, None, &root.display().to_string())
+        .unwrap();
+    Arc::new(Harness::new(
+        RoleRegistry::from_toml(ROLES).unwrap(),
+        Workspaces::new(root.to_path_buf()),
+        store,
+        session,
+        tx,
+    ))
+}
+
+#[tokio::test]
+async fn work_waiting_for_review_survives_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]).await;
+    git(&root, &["config", "user.email", "harness@test"]).await;
+    git(&root, &["config", "user.name", "Harness Test"]).await;
+    std::fs::write(root.join("README.md"), "base\n").unwrap();
+    git(&root, &["add", "-A"]).await;
+    git(&root, &["commit", "-q", "-m", "init"]).await;
+    let db = dir.path().join("sessions.db");
+
+    let (proposed, kept, landed) = {
+        let first = reopen(&root, &db, "s1").await;
+        let proposed = first
+            .delegate("local_builder", "WRITE:proposed.txt:p", vec![])
+            .await
+            .unwrap();
+        first.request_merge(&proposed.id).await.unwrap();
+        let kept = first
+            .delegate("local_builder", "WRITE:kept.txt:k", vec![])
+            .await
+            .unwrap();
+        let landed = first
+            .delegate("local_builder", "WRITE:landed.txt:l", vec![])
+            .await
+            .unwrap();
+        first.request_merge(&landed.id).await.unwrap();
+        // Let its checks settle, then land it.
+        for _ in 0..100 {
+            if first.verifications_running().await == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        first.approve_merge(&landed.id).await.unwrap();
+        (proposed.id, kept.id, landed.id)
+    };
+
+    let second = reopen(&root, &db, "s2").await;
+    assert!(second.workers().await.is_empty());
+    assert_eq!(second.restore().await.unwrap(), 2);
+
+    let back = second.worker(&proposed).await.expect("the proposed worker");
+    assert_eq!(back.status, WorkerStatus::Done);
+    assert_eq!(back.diff.unwrap().files, ["proposed.txt"]);
+    let pending: Vec<String> = second
+        .pending_merges()
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(pending, [proposed.clone()], "still waiting for review");
+    assert!(
+        second.worker(&kept).await.is_some(),
+        "finished, never proposed"
+    );
+    assert!(
+        second.worker(&landed).await.is_none(),
+        "already in the checkout"
+    );
+
+    // It can be landed from the new session, as if nothing had happened.
+    second.approve_merge(&proposed).await.unwrap();
+    assert!(root.join("proposed.txt").exists());
+
+    // The window replays the same picture from a snapshot, and a second restore
+    // brings back nothing twice.
+    let snapshot = second.snapshot_events().await;
+    assert!(snapshot.iter().any(
+        |e| matches!(e, HarnessEvent::WorkerSpawned { worker_id, number, .. } if worker_id == &kept && *number > 0)
+    ));
+    assert_eq!(second.restore().await.unwrap(), 0);
+}

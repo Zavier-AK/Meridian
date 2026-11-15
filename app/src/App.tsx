@@ -461,6 +461,28 @@ export default function App() {
     [session, focusProject],
   );
 
+  // Opening a project, or coming back to one, replays its workers so the rail and the
+  // reviews waiting show what happened while this window wasn't watching, including
+  // work an earlier run of the app left on its branches. Live events win over the replay.
+  const frontProject = session?.project_root ?? null;
+  useEffect(() => {
+    if (!frontProject) return;
+    let cancelled = false;
+    invoke<HarnessEvent[]>("worker_snapshot", { project: frontProject })
+      .then((events) => {
+        if (cancelled || events.length === 0) return;
+        const replayed = events.reduce(reduceWorkers, {} as Record<string, Worker>);
+        setWorkers((live) => ({ ...replayed, ...live }));
+        setChangesKey((key) => key + 1);
+      })
+      .catch(() => {
+        // A readout; the project still opens without it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [frontProject]);
+
   const refreshUsage = useCallback(async () => {
     try {
       setUsage(await invoke<UsageRow[]>("usage", { hours: 5 }));

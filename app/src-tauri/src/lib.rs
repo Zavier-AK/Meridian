@@ -736,6 +736,12 @@ async fn start_session(
         tx,
     ));
     load_extras(&harness).await;
+    // Work an earlier run left on its branches comes back to the rail and the reviews.
+    match harness.restore().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("restored {n} worker(s) from earlier sessions"),
+        Err(error) => tracing::warn!("could not restore earlier workers: {error:#}"),
+    }
     harness.set_notes(settings::load().notes.notes()).await;
     harness
         .set_autonomy(harness_core::autonomy::load(&project))
@@ -881,6 +887,16 @@ async fn session_roles(
             unavailable_reason: r.unavailable_reason,
         })
         .collect())
+}
+
+/// The project's workers as events, for a window that opens or returns to it to replay:
+/// the rail, the merges waiting and their checks.
+#[tauri::command]
+async fn worker_snapshot(
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<Vec<HarnessEvent>, String> {
+    Ok(harness_for(&state, project).await?.snapshot_events().await)
 }
 
 #[tauri::command]
@@ -2444,6 +2460,7 @@ pub fn run() {
             write_default_roles,
             make_first_commit,
             open_home,
+            worker_snapshot,
             answer_permission,
             revise_worker,
             changes_overview,

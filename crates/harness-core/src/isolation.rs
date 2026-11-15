@@ -786,6 +786,37 @@ impl Workspaces {
         Ok(())
     }
 
+    /// Every branch Meridian made in this repository, by name (`harness/w-…`).
+    pub async fn harness_branches(&self) -> Result<Vec<String>> {
+        let listed = git(
+            &self.project_root,
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)",
+                &format!("refs/heads/{BRANCH_PREFIX}/"),
+            ],
+        )
+        .await?;
+        Ok(listed
+            .lines()
+            .map(str::trim)
+            .filter(|b| harness_branch(b).is_ok())
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Whether everything on `branch` is already in the current checkout: it landed, or
+    /// it never changed anything.
+    pub async fn is_merged(&self, branch: &str) -> Result<bool> {
+        harness_branch(branch)?;
+        Ok(git(
+            &self.project_root,
+            &["merge-base", "--is-ancestor", branch, "HEAD"],
+        )
+        .await
+        .is_ok())
+    }
+
     /// Create a harness branch at the current checkout's tip.
     pub async fn create_branch(&self, branch: &str) -> Result<()> {
         harness_branch(branch)?;
