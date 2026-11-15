@@ -2285,3 +2285,33 @@ async fn work_waiting_for_review_survives_a_restart() {
     ));
     assert_eq!(second.restore().await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn a_change_that_no_longer_merges_fails_its_checks_and_waits() {
+    let mut f = fixture_with(&passing_verify()).await;
+    f.harness.set_autonomy(Autonomy::LandMost).await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:README.md:from the worker", vec![])
+        .await
+        .unwrap();
+    // The same file changes on the person's branch before the change is proposed.
+    std::fs::write(f.root.join("README.md"), "from the person\n").unwrap();
+    git(&f.root, &["commit", "-q", "-am", "edit"]).await;
+
+    f.harness.request_merge(&record.id).await.unwrap();
+    let (_, report) = verification_of(&mut f, &record.id).await;
+    let merge = report
+        .checks
+        .iter()
+        .find(|c| c.name == "Merge")
+        .expect("a merge check");
+    assert!(merge.summary.contains("README.md"), "{}", merge.summary);
+    assert_eq!(report.risk, harness_core::verify::Risk::High);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(
+        f.harness.pending_merges().await.len(),
+        1,
+        "left for the person, never landed by itself"
+    );
+}

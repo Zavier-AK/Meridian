@@ -246,6 +246,15 @@ impl Workspace {
     }
 }
 
+/// A checkout of a branch merged with the person's current checkout. See
+/// [`Workspaces::checkout_merged`].
+pub enum MergedCheckout {
+    /// Merged cleanly; `base` is the checkout's commit it was merged with.
+    Clean { workspace: Workspace, base: String },
+    /// Would not merge: these files conflict with what is on the checkout now.
+    Conflict { base: String, files: Vec<String> },
+}
+
 /// Prepares workspaces and owns the advisory lock that serializes shared-mode workers.
 #[derive(Clone)]
 pub struct Workspaces {
@@ -642,6 +651,63 @@ impl Workspaces {
             _shared_guard: None,
             git_lock: Arc::clone(&self.git_lock),
         })
+    }
+
+    /// The commit the person's checkout is on.
+    pub async fn head(&self) -> Result<String> {
+        git(&self.project_root, &["rev-parse", "HEAD"]).await
+    }
+
+    /// [`Workspaces::checkout_branch`], with the person's current checkout merged in on
+    /// top (not committed), so checks run against exactly what landing would produce,
+    /// not the branch as it stood when its worker started. Two changes that each pass
+    /// alone can break together; this is where that shows.
+    ///
+    /// A branch that no longer merges cleanly comes back as [`MergedCheckout::Conflict`],
+    /// with the files in conflict and nothing left behind.
+    pub async fn checkout_merged(&self, id: &str, branch: &str) -> Result<MergedCheckout> {
+        let base = self.head().await?;
+        let workspace = self.checkout_branch(id, branch).await?;
+        // Already built on top of the checkout: the branch is the merge result.
+        let up_to_date = git(
+            &workspace.cwd,
+            &["merge-base", "--is-ancestor", &base, "HEAD"],
+        )
+        .await
+        .is_ok();
+        if up_to_date {
+            return Ok(MergedCheckout::Clean { workspace, base });
+        }
+        let merged = git(
+            &workspace.cwd,
+            &[
+                // Never committed, but git still wants a name for a merge.
+                "-c",
+                "user.name=Meridian",
+                "-c",
+                "user.email=harness@localhost",
+                "merge",
+                "--no-commit",
+                "--no-ff",
+                "--quiet",
+                &base,
+            ],
+        )
+        .await;
+        match merged {
+            Ok(_) => Ok(MergedCheckout::Clean { workspace, base }),
+            Err(_) => {
+                let files = git(&workspace.cwd, &["diff", "--name-only", "--diff-filter=U"])
+                    .await
+                    .unwrap_or_default()
+                    .lines()
+                    .map(str::to_string)
+                    .collect();
+                let _ = git(&workspace.cwd, &["merge", "--abort"]).await;
+                workspace.release().await.ok();
+                Ok(MergedCheckout::Conflict { base, files })
+            }
+        }
     }
 
     /// A worktree back on a finished worker's own branch, at the path it first had, so the
@@ -1380,6 +1446,76 @@ mod tests {
             workspaces.checkout_branch("w-x", "main").await.is_err(),
             "harness branches only"
         );
+    }
+
+    #[tokio::test]
+    async fn checks_see_the_branch_merged_with_what_has_landed_since() {
+        let (dir, workspaces) = scratch_repo().await;
+        let worker = workspaces
+            .prepare("w-m", Isolation::Worktree)
+            .await
+            .unwrap();
+        tokio::fs::write(worker.cwd.join("feature.txt"), "work\n")
+            .await
+            .unwrap();
+        worker.commit("work").await.unwrap();
+        let branch = worker.branch.clone().unwrap();
+        worker.release().await.unwrap();
+
+        // Something else lands on the checkout after the worker branched.
+        tokio::fs::write(dir.path().join("landed.txt"), "other\n")
+            .await
+            .unwrap();
+        git(dir.path(), &["add", "-A"]).await.unwrap();
+        git(dir.path(), &["commit", "-q", "-m", "other"])
+            .await
+            .unwrap();
+        let head = workspaces.head().await.unwrap();
+
+        match workspaces.checkout_merged("w-m", &branch).await.unwrap() {
+            MergedCheckout::Clean { workspace, base } => {
+                assert_eq!(base, head);
+                assert!(workspace.cwd.join("feature.txt").exists());
+                assert!(
+                    workspace.cwd.join("landed.txt").exists(),
+                    "what landed since is part of what gets checked"
+                );
+                workspace.release().await.unwrap();
+            }
+            MergedCheckout::Conflict { files, .. } => panic!("conflict in {files:?}"),
+        }
+        // Checking merged nothing for real.
+        let log = git(dir.path(), &["log", "--oneline", &branch])
+            .await
+            .unwrap();
+        assert!(!log.contains("other"));
+
+        // The same file changed both ways: a conflict, said plainly, nothing left over.
+        let clash = workspaces
+            .prepare("w-c", Isolation::Worktree)
+            .await
+            .unwrap();
+        tokio::fs::write(clash.cwd.join("landed.txt"), "mine\n")
+            .await
+            .unwrap();
+        clash.commit("clash").await.unwrap();
+        let clash_branch = clash.branch.clone().unwrap();
+        clash.release().await.unwrap();
+        tokio::fs::write(dir.path().join("landed.txt"), "theirs\n")
+            .await
+            .unwrap();
+        git(dir.path(), &["commit", "-q", "-am", "theirs"])
+            .await
+            .unwrap();
+        match workspaces
+            .checkout_merged("w-c", &clash_branch)
+            .await
+            .unwrap()
+        {
+            MergedCheckout::Conflict { files, .. } => assert_eq!(files, ["landed.txt"]),
+            MergedCheckout::Clean { .. } => panic!("expected a conflict"),
+        }
+        assert!(!dir.path().join(VERIFY_DIR).join("w-c").exists());
     }
 
     /// Two engines — or an engine and a hook process — share nothing in memory, so only

@@ -1849,6 +1849,24 @@ impl Harness {
     /// Check a proposed merge: signals from the diff, the project's own commands in a
     /// fresh checkout, then an independent review. See [`crate::verify`].
     async fn verify(self: Arc<Self>, worker_id: String, branch: String) {
+        self.verify_attempt(worker_id, branch, 0).await
+    }
+
+    /// [`Harness::verify_attempt`] again, boxed: a future that spawns itself needs its
+    /// type spelled out somewhere, or the compiler cannot tell it is `Send`.
+    fn reverify(
+        self: Arc<Self>,
+        worker_id: String,
+        branch: String,
+        attempt: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(self.verify_attempt(worker_id, branch, attempt))
+    }
+
+    /// One pass of checks on a proposed merge. `attempt` counts the passes made because
+    /// the person's branch moved while an earlier one ran.
+    async fn verify_attempt(self: Arc<Self>, worker_id: String, branch: String, attempt: u32) {
+        use crate::isolation::MergedCheckout;
         use crate::verify::{self as v, Check, CheckKind, CheckStatus};
 
         self.record(HarnessEvent::VerificationStarted {
@@ -1880,11 +1898,50 @@ impl Harness {
         .await;
 
         // Only pay for a checkout (and its setup, e.g. `npm ci`) when something will use it.
+        // It is the branch merged with the checkout as it is now: what would land, not
+        // what the worker saw when it started.
+        let mut base: Option<String> = None;
         let checkout = if config.commands.is_empty() && config.reviewer.is_none() {
             None
         } else {
-            match self.workspaces.checkout_branch(&worker_id, &branch).await {
-                Ok(workspace) => Some(workspace),
+            match self.workspaces.checkout_merged(&worker_id, &branch).await {
+                Ok(MergedCheckout::Clean {
+                    workspace,
+                    base: merged_with,
+                }) => {
+                    base = Some(merged_with);
+                    Some(workspace)
+                }
+                Ok(MergedCheckout::Conflict {
+                    base: merged_with,
+                    files,
+                }) => {
+                    base = Some(merged_with);
+                    self.push_check(
+                        &worker_id,
+                        Check {
+                            kind: CheckKind::Command,
+                            name: "Merge".into(),
+                            status: CheckStatus::Failed,
+                            summary: format!(
+                                "no longer merges cleanly with your branch; {} changed on \
+                                 both sides: {}",
+                                if files.len() == 1 {
+                                    "this file"
+                                } else {
+                                    "these files"
+                                },
+                                files.join(", ")
+                            ),
+                            output: None,
+                            risk: None,
+                            findings: Vec::new(),
+                            reviewer: None,
+                        },
+                    )
+                    .await;
+                    None
+                }
                 Err(err) => {
                     self.push_check(
                         &worker_id,
@@ -2027,6 +2084,28 @@ impl Harness {
         // own. Still only a proposal that is pending — one they already merged or
         // discarded is left alone.
         if lands && self.pending_merges.read().await.contains_key(&worker_id) {
+            // The checks ran against the checkout as it was. If something landed since,
+            // that is not what they passed: check again before landing anything.
+            let moved = match (&base, self.workspaces.head().await) {
+                (Some(checked), Ok(now)) => *checked != now,
+                _ => false,
+            };
+            if moved {
+                if attempt < MAX_REVERIFY {
+                    self.verifications.write().await.insert(
+                        worker_id.clone(),
+                        VerificationState::Running { checks: Vec::new() },
+                    );
+                    tokio::spawn(Arc::clone(&self).reverify(worker_id, branch, attempt + 1));
+                } else {
+                    self.record(HarnessEvent::MergeNotLanded {
+                        worker_id,
+                        reason: "your branch kept changing while it was being checked".into(),
+                    })
+                    .await;
+                }
+                return;
+            }
             if let Err(err) = self.land(&worker_id, true).await {
                 self.record(HarnessEvent::MergeNotLanded {
                     worker_id,
@@ -2917,6 +2996,10 @@ impl Harness {
         self.store.lock().await.project_history(&key, limit)
     }
 }
+
+/// How many times checks on one proposed merge are run again because the person's branch
+/// moved while they ran, before it is left for the person instead of landing by itself.
+const MAX_REVERIFY: u32 = 2;
 
 /// A worker from an earlier run of the app, put back together from its recorded events.
 /// `None` when nothing records it starting.
