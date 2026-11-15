@@ -2263,7 +2263,11 @@ async fn work_waiting_for_review_survives_a_restart() {
         .into_iter()
         .map(|(id, _)| id)
         .collect();
-    assert_eq!(pending, [proposed.clone()], "still waiting for review");
+    assert_eq!(
+        pending,
+        std::slice::from_ref(&proposed),
+        "still waiting for review"
+    );
     assert!(
         second.worker(&kept).await.is_some(),
         "finished, never proposed"
