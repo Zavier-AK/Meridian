@@ -243,28 +243,26 @@ fn forward_events(
                 HarnessEvent::VerificationFinished { worker_id, report } => {
                     tell_head_about_failed_checks(&app, &project, worker_id, report).await;
                 }
-                // Under `Ask`, `delegate` returned before the work ran. Close the loop so
-                // the head agent learns how each approved delegation ended.
+                // The head agent isn't waiting on this worker — it ran in the background,
+                // or after the person approved it — so tell it how it ended. Then it never
+                // has to poll, and never misses a result by ending its turn.
                 HarnessEvent::WorkerFinished {
                     worker_id,
                     summary,
                     diff,
                     is_error,
                     ..
-                } if harness.take_approved(worker_id).await => {
-                    let outcome = if *is_error { "failed" } else { "finished" };
-                    let merge = if diff.as_ref().is_some_and(|d| d.files_changed > 0) {
-                        " Its changes are on a branch; call `request_merge` to propose them."
-                    } else {
-                        ""
-                    };
+                } if harness.take_reportable(worker_id).await => {
+                    let role = harness
+                        .worker(worker_id)
+                        .await
+                        .map(|w| w.role)
+                        .filter(|r| !r.is_empty())
+                        .unwrap_or_else(|| "worker".into());
                     tell_head(
                         &app,
                         &project,
-                        &format!(
-                        "The delegation {worker_id} the person approved has {outcome}: {}.{merge}",
-                        first_line(summary)
-                    ),
+                        &worker_notice(worker_id, &role, summary, diff.as_ref(), *is_error),
                     )
                     .await;
                 }
@@ -342,10 +340,35 @@ async fn tell_head(app: &AppHandle, project: &str, notice: &str) {
         ..
     }) = projects.get_mut(project)
     {
-        if let Err(error) = orchestrator.send(notice).await {
+        if let Err(error) = orchestrator.notify(notice).await {
             tracing::warn!("could not send the head agent a notice: {error:#}");
         }
     }
+}
+
+/// What the head agent is told when a worker it isn't waiting on finishes.
+fn worker_notice(
+    worker_id: &str,
+    role: &str,
+    summary: &str,
+    diff: Option<&harness_core::event::DiffStat>,
+    is_error: bool,
+) -> String {
+    let outcome = if is_error { "failed" } else { "finished" };
+    let merge = match diff {
+        Some(d) if d.files_changed > 0 => format!(
+            " It changed {} file{} on its own branch; call `request_merge` to propose them, \
+             unless it is part of a plan, which proposes its own.",
+            d.files_changed,
+            if d.files_changed == 1 { "" } else { "s" }
+        ),
+        _ => String::new(),
+    };
+    format!(
+        "Worker {worker_id} ({role}) has {outcome}: {}.{merge} Read its full result with \
+         `collect` if you need more than this line.",
+        first_line(summary)
+    )
 }
 
 fn first_line(text: &str) -> String {

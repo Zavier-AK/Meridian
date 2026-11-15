@@ -189,8 +189,11 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
          shows it on a board. Then end your turn. For a single piece of work, just \
          delegate it. A review, a question or an investigation is a single piece of work: \
          delegate it to one reviewer rather than planning it.\n\
-         - Use `delegate_async` plus `check_workers` when several pieces of work are \
-         independent, so they run in parallel.\n\
+         - Use `delegate_async` when several pieces of work are independent, so they run \
+         in parallel. You are sent a notice from Meridian as each one finishes; end your \
+         turn rather than polling, and pick the work up when the notice arrives.\n\
+         - Messages that begin \"[Automatic notice from Meridian\" come from the harness, \
+         not the person: act on them, and report to the person what matters.\n\
          - Workers that edit files run in their own git worktree. Their changes are NOT on \
          the user's branch. To land them, call `request_merge` — this only queues the diff \
          for the user to approve. Never tell the user work has landed unless \
@@ -301,6 +304,11 @@ async fn github_brief_for(project_root: &Path) -> String {
         Ok((state, login)) => github_brief(state, login.as_deref()),
         Err(_) => github_brief(GhState::Ready, None),
     }
+}
+
+/// How a harness notice reads to the head agent: plainly from Meridian, not the person.
+pub fn notice_text(text: &str) -> String {
+    format!("[Automatic notice from Meridian, not a message from the person] {text}")
 }
 
 /// A running head chat: the MCP server, the Claude process, and the event stream.
@@ -456,6 +464,20 @@ impl Orchestrator {
         }
         message.push_str(&crate::attachments::note(&images));
         self.session.send_with_images(&message, &images).await
+    }
+
+    /// Tell the head agent something on the harness's behalf — a background worker
+    /// finished, a plan ended, a check failed. Recorded as a [`HarnessEvent::HeadNotice`]
+    /// rather than a user message, so the chat never shows it as the person's words, and
+    /// marked in the text so the head agent doesn't take it as theirs either.
+    pub async fn notify(&mut self, text: &str) -> Result<()> {
+        self.harness
+            .record_head_event(HarnessEvent::HeadNotice {
+                run_id: self.session.run_id.clone(),
+                text: text.to_string(),
+            })
+            .await;
+        self.session.send(&notice_text(text)).await
     }
 
     /// Stop the head agent's current turn. The conversation and the process survive,

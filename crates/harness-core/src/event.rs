@@ -312,6 +312,14 @@ pub enum HarnessEvent {
         attachments: Vec<String>,
     },
 
+    /// Something the harness told the head agent on its own: a background worker
+    /// finished, a plan ended, checks failed. Kept apart from [`HarnessEvent::UserMessage`]
+    /// so it is never shown, or replayed, as words the person typed.
+    HeadNotice {
+        run_id: String,
+        text: String,
+    },
+
     /// Emitted from the Claude CLI's `system/api_retry`. `error` carries the category,
     /// e.g. `rate_limit` — the hook for backpressure.
     ApiRetry {
@@ -372,6 +380,7 @@ impl HarnessEvent {
             | Self::SubagentProgress { run_id, .. }
             | Self::SubagentFinished { run_id, .. }
             | Self::UserMessage { run_id, .. }
+            | Self::HeadNotice { run_id, .. }
             | Self::RunFinished { run_id, .. }
             | Self::Error { run_id, .. }
             | Self::PromptSize { run_id, .. }

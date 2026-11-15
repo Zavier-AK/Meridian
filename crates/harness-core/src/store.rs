@@ -282,7 +282,7 @@ impl Store {
              JOIN sessions ON sessions.id = events.session_id \
              WHERE sessions.project_root = ?1 \
                AND json_extract(events.payload, '$.type') IN \
-                   ('user_message', 'assistant_text', 'tool_call', 'turn_interrupted', 'run_finished', 'error') \
+                   ('user_message', 'head_notice', 'assistant_text', 'tool_call', 'turn_interrupted', 'run_finished', 'error') \
              ORDER BY events.id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_root, limit as i64], |row| {

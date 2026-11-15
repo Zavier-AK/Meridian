@@ -78,7 +78,9 @@ pub struct Harness {
     autonomy: RwLock<crate::autonomy::Autonomy>,
     /// Delegations waiting for the person's approval, keyed by worker id.
     approvals: RwLock<HashMap<String, PendingDelegation>>,
-    /// Workers the person approved, so their outcome can be reported to the head agent.
+    /// Workers whose outcome the head agent is told about when they finish, because it
+    /// isn't waiting for them: ones the person approved, and ones started in the
+    /// background with `delegate_async`.
     approved: RwLock<std::collections::HashSet<String>>,
     /// Merges that landed, with their merge commit, so a landing can be undone.
     landed: RwLock<HashMap<String, Landed>>,
@@ -398,19 +400,36 @@ impl Harness {
         Ok(())
     }
 
-    /// Whether the person approved this worker, forgetting it once asked — so its outcome
-    /// is reported to the head agent exactly once.
-    pub async fn take_approved(&self, worker_id: &str) -> bool {
+    /// Whether the head agent should be told how this worker ended, forgetting it once
+    /// asked — so its outcome is reported exactly once.
+    pub async fn take_reportable(&self, worker_id: &str) -> bool {
         self.approved.write().await.remove(worker_id)
     }
 
+    /// A worker that could not start: failed, said once. A worker already settled is left
+    /// as it is, and one that never got a record (its role didn't resolve) gets one, so
+    /// nothing waiting on it — a plan step, the rail — waits forever.
     async fn fail_before_start(&self, worker_id: &str, reason: &str) {
-        if let Some(mut record) = self.worker(worker_id).await {
-            record.status = WorkerStatus::Failed;
-            record.is_error = true;
-            record.summary = reason.to_string();
-            self.upsert(record).await;
+        let existing = self.worker(worker_id).await;
+        if existing.as_ref().is_some_and(|r| r.status.is_terminal()) {
+            return;
         }
+        let mut record = existing.unwrap_or_else(|| WorkerRecord {
+            id: worker_id.to_string(),
+            role: String::new(),
+            status: WorkerStatus::Queued,
+            task: String::new(),
+            summary: String::new(),
+            usage: Usage::default(),
+            diff: None,
+            branch: None,
+            is_error: false,
+        });
+        record.status = WorkerStatus::Failed;
+        record.is_error = true;
+        record.summary = reason.to_string();
+        self.upsert(record).await;
+        self.cancels.write().await.remove(worker_id);
         self.record(HarnessEvent::WorkerFinished {
             worker_id: worker_id.to_string(),
             summary: reason.to_string(),
@@ -661,11 +680,21 @@ impl Harness {
             self.set_status(&worker_id, WorkerStatus::Preparing).await;
         }
 
-        let workspace = self
+        let workspace = match self
             .workspaces
             .prepare_from(&worker_id, role.isolation, base.unwrap_or("HEAD"))
             .await
-            .context("preparing the worker's workspace")?;
+            .context("preparing the worker's workspace")
+        {
+            Ok(workspace) => workspace,
+            Err(err) => {
+                // Settled here, not left "preparing" for good: a worker stuck in a live
+                // state also keeps its project from ever suspending.
+                self.fail_before_start(&worker_id, &format!("{err:#}"))
+                    .await;
+                return Err(err);
+            }
+        };
 
         self.record(HarnessEvent::WorkerSpawned {
             worker_id: worker_id.clone(),
@@ -818,7 +847,8 @@ impl Harness {
         Ok(record)
     }
 
-    /// Start a worker and return immediately, so the orchestrator can fan out.
+    /// Start a worker and return immediately, so the orchestrator can fan out. The head
+    /// agent is told how it ended when it finishes, so it never has to poll.
     pub async fn delegate_async(
         self: &Arc<Self>,
         role: &str,
@@ -830,6 +860,8 @@ impl Harness {
         let resolved = self.resolve_role(role).await?;
         self.registry.read().await.get(&resolved)?;
 
+        // One id from start to finish: the one returned here is the one the worker runs
+        // under, so `check_workers`, the rail and the merge gate all agree on it.
         let worker_id = format!("w-{}", Uuid::new_v4().simple());
         self.upsert(WorkerRecord {
             id: worker_id.clone(),
@@ -843,27 +875,17 @@ impl Harness {
             is_error: false,
         })
         .await;
+        self.approved.write().await.insert(worker_id.clone());
 
         let harness = Arc::clone(self);
-        let placeholder = worker_id.clone();
+        let id = worker_id.clone();
         let task = task.to_string();
-
         tokio::spawn(async move {
-            match harness.delegate(&resolved, &task, context_files).await {
-                Ok(record) => {
-                    // The real run allocated its own id; alias the placeholder to it so
-                    // `check_workers` and `collect` can find the result.
-                    let mut workers = harness.workers.write().await;
-                    workers.insert(placeholder, record);
-                }
-                Err(err) => {
-                    let mut workers = harness.workers.write().await;
-                    if let Some(record) = workers.get_mut(&placeholder) {
-                        record.status = WorkerStatus::Failed;
-                        record.is_error = true;
-                        record.summary = format!("{err:#}");
-                    }
-                }
+            if let Err(err) = harness
+                .run_delegation(id.clone(), &resolved, &task, context_files)
+                .await
+            {
+                harness.fail_before_start(&id, &format!("{err:#}")).await;
             }
         });
 

@@ -552,6 +552,8 @@ export default function App() {
         setRateLimited(payload.error === "rate_limit");
       }
       if (payload.type === "turn_interrupted") setBusy(false);
+      // Meridian told the head agent something (a worker finished): that starts a turn.
+      if (payload.type === "head_notice" && payload.run_id === headRun.current) setBusy(true);
       if (payload.type === "plan_updated") {
         const incoming = payload.plan;
         setPlan((current) => {
@@ -1450,6 +1452,10 @@ function reduceChat(
       ];
     }
 
+    case "head_notice":
+      if (event.run_id !== headRun.current) return prev;
+      return [...prev, { kind: "notice", tone: "info", text: noticeLine(event.text) }];
+
     case "note_written":
       return [...prev, { kind: "note", path: event.path, created: event.created }];
 
@@ -1970,6 +1976,9 @@ function historyToChat(events: HarnessEvent[]): ChatItem[] {
       case "user_message":
         items.push({ kind: "user", text: event.text, attached: event.attachments?.length });
         break;
+      case "head_notice":
+        items.push({ kind: "notice", tone: "info", text: noticeLine(event.text) });
+        break;
       case "assistant_text":
         if (!event.partial) items.push({ kind: "assistant", text: event.text });
         break;
@@ -1987,6 +1996,11 @@ function historyToChat(events: HarnessEvent[]): ChatItem[] {
     }
   }
   return items;
+}
+
+/** A harness notice to the head agent, as the chat shows it: Meridian's, not yours. */
+function noticeLine(text: string): string {
+  return `Meridian told the head agent: ${text}`;
 }
 
 function firstLine(text: string): string {
