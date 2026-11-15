@@ -9,6 +9,7 @@ type Checks = {
   timeout_secs: number;
   max_parallel_workers: number;
   worker_timeout_mins: number;
+  budget_tokens_5h: number | null;
 };
 
 type View = { checks: Checks; roles: string[] };
@@ -146,6 +147,20 @@ export default function ChecksPanel({ projectRoot }: { projectRoot: string }) {
             min={1}
             value={draft.worker_timeout_mins}
             onChange={(event) => update({ worker_timeout_mins: Math.max(1, Number(event.target.value) || 1) })}
+          />
+        </label>
+        <label title="Fresh tokens (not cache reads) this project may spend in any five hours before new workers are refused. Blank for no limit.">
+          Tokens per 5 hours
+          <input
+            type="number"
+            min={1}
+            step={100000}
+            placeholder="No limit"
+            value={draft.budget_tokens_5h ?? ""}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              update({ budget_tokens_5h: event.target.value === "" || !value ? null : Math.max(1, value) });
+            }}
           />
         </label>
       </div>

@@ -2557,3 +2557,47 @@ async fn conflict_markers_left_behind_are_backed_out_not_landed() {
             .await
     );
 }
+
+#[tokio::test]
+async fn new_work_waits_once_the_five_hour_budget_is_spent() {
+    let f = fixture_with(&format!("{ROLES}\n[limits]\nbudget_tokens_5h = 10000\n")).await;
+    // Under budget: work starts.
+    f.harness
+        .delegate("local_builder", "WRITE:a.txt:a", vec![])
+        .await
+        .unwrap();
+
+    f.harness
+        .register_orchestrator("orchestrator-s1", Some("sonnet"))
+        .await;
+    f.harness
+        .note_event(&HarnessEvent::RunFinished {
+            run_id: "orchestrator-s1".into(),
+            text: "planned".into(),
+            usage: harness_core::event::Usage {
+                input_tokens: 100,
+                output_tokens: 900,
+                cache_creation_input_tokens: 9_500,
+                // Cache reads are cheap and don't count against it.
+                cache_read_input_tokens: 5_000_000,
+            },
+            cost_usd: None,
+            is_error: false,
+        })
+        .await;
+    // The head's turn, plus the little the mock worker reports; none of the cache reads.
+    let spent = f.harness.fresh_tokens_5h().await;
+    assert!((10_500..20_000).contains(&spent), "{spent}");
+
+    let err = f
+        .harness
+        .delegate("local_builder", "WRITE:b.txt:b", vec![])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("budget is spent"), "{err}");
+    assert!(f
+        .harness
+        .delegate_async("local_builder", "WRITE:c.txt:c", vec![])
+        .await
+        .is_err());
+}

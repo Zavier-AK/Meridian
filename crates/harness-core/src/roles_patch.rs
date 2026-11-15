@@ -141,6 +141,8 @@ pub struct ChecksPatch {
     pub timeout_secs: u64,
     pub max_parallel_workers: usize,
     pub worker_timeout_mins: u64,
+    #[serde(default)]
+    pub budget_tokens_5h: Option<u64>,
 }
 
 impl ChecksPatch {
@@ -153,6 +155,7 @@ impl ChecksPatch {
             timeout_secs: registry.verify.timeout_secs,
             max_parallel_workers: registry.limits.max_parallel_workers,
             worker_timeout_mins: registry.limits.worker_timeout_mins,
+            budget_tokens_5h: registry.limits.budget_tokens_5h,
         }
     }
 }
@@ -215,6 +218,17 @@ pub fn apply_checks_patch(source: &str, patch: &ChecksPatch) -> Result<String> {
         "worker_timeout_mins",
         &patch.worker_timeout_mins.to_string(),
     )?;
+    let end = table_end(&lines, start);
+    match patch.budget_tokens_5h {
+        Some(budget) => set_raw_field(
+            &mut lines,
+            start,
+            end,
+            "budget_tokens_5h",
+            &budget.to_string(),
+        )?,
+        None => remove_field(&mut lines, start, end, "budget_tokens_5h"),
+    }
 
     let mut patched = lines.join("\n");
     if had_trailing_newline {
@@ -578,6 +592,7 @@ provider_opts = { model_provider = "lmstudio" }
             timeout_secs: 600,
             max_parallel_workers: 2,
             worker_timeout_mins: 45,
+            budget_tokens_5h: Some(2_000_000),
         };
         let patched = apply_checks_patch(source, &patch).unwrap();
         assert!(patched.contains("# my fleet"), "{patched}");
@@ -587,6 +602,7 @@ provider_opts = { model_provider = "lmstudio" }
         assert_eq!(registry.verify.timeout_secs, 600);
         assert_eq!(registry.limits.max_parallel_workers, 2);
         assert_eq!(registry.limits.worker_timeout_mins, 45);
+        assert_eq!(registry.limits.budget_tokens_5h, Some(2_000_000));
         assert!(!patched.contains("old one"));
         assert_eq!(
             ChecksPatch::from_registry(&registry).commands,

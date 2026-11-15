@@ -312,8 +312,9 @@ fn forward_events(
                     event: &event,
                 },
             ) {
-                tracing::warn!("dropping event, webview gone: {err}");
-                break;
+                // The window missing one event is no reason to stop: the loop also keeps
+                // the record (transcripts, usage, notices), which must go on regardless.
+                tracing::warn!("could not show an event in the window: {err}");
             }
         }
     });

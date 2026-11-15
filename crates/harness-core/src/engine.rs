@@ -676,6 +676,7 @@ impl Harness {
         base: Option<&str>,
     ) -> Result<WorkerRecord> {
         let role_name = self.resolve_role(requested_role).await?;
+        self.check_budget().await?;
         // Cloned out of the lock: the worker runs for minutes and must not hold it.
         let role = self.registry.read().await.get(&role_name)?.clone();
 
@@ -899,6 +900,38 @@ impl Harness {
         Ok(record)
     }
 
+    /// Fresh tokens this project has spent in the last five hours: input, cache writes and
+    /// output, not cache reads. What `limits.budget_tokens_5h` is measured against.
+    pub async fn fresh_tokens_5h(&self) -> u64 {
+        self.store
+            .lock()
+            .await
+            .usage_window(5 * 60 * 60)
+            .unwrap_or_default()
+            .iter()
+            .map(|p| {
+                p.usage.input_tokens + p.usage.cache_creation_input_tokens + p.usage.output_tokens
+            })
+            .sum()
+    }
+
+    /// Refuse new work once the project's five-hour budget is spent, with a reason the
+    /// head agent can pass on. Work already running finishes.
+    async fn check_budget(&self) -> Result<()> {
+        let Some(budget) = self.registry.read().await.limits.budget_tokens_5h else {
+            return Ok(());
+        };
+        let spent = self.fresh_tokens_5h().await;
+        if spent >= budget {
+            bail!(
+                "this project's budget is spent: {spent} of {budget} tokens in the last five \
+                 hours (limits.budget_tokens_5h). No new workers start until older usage ages \
+                 out of the window, or the person raises the limit under Change fleet › Limits"
+            );
+        }
+        Ok(())
+    }
+
     /// Start a worker and return immediately, so the orchestrator can fan out. The head
     /// agent is told how it ended when it finishes, so it never has to poll.
     pub async fn delegate_async(
@@ -911,6 +944,7 @@ impl Harness {
         // now rather than a worker that mysteriously fails later.
         let resolved = self.resolve_role(role).await?;
         self.registry.read().await.get(&resolved)?;
+        self.check_budget().await?;
 
         // One id from start to finish: the one returned here is the one the worker runs
         // under, so `check_workers`, the rail and the merge gate all agree on it.

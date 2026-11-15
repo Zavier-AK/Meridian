@@ -92,7 +92,12 @@ by default.
 [limits]
 max_parallel_workers = 4   # more than this wait as queued
 worker_timeout_mins  = 90  # a worker running longer is stopped
+# budget_tokens_5h   = 3000000  # optional: refuse new workers past this in any 5 hours
 ```
+
+The budget counts fresh tokens in this project (input, cache writes and output; cache reads
+cost a tenth and aren't counted). Once it's spent, new delegations and plan steps are
+refused with the reason, which the head agent passes on; work already running finishes.
 
 A worker stopped by the time limit fails with a note saying so, and whatever it wrote is
 kept on its branch to review, as when you stop one yourself.
