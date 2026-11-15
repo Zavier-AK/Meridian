@@ -2146,3 +2146,19 @@ async fn notes_are_refused_while_off_and_every_write_is_shown() {
         .await
         .is_err());
 }
+
+#[tokio::test]
+async fn the_head_agents_cli_waits_longer_than_five_minutes_on_a_delegation() {
+    let fx = fixture().await;
+    let server = harness_core::mcp::serve(Arc::clone(&fx.harness))
+        .await
+        .unwrap();
+    let config: serde_json::Value = serde_json::from_str(&server.claude_mcp_config()).unwrap();
+    let timeout = config["mcpServers"]["harness"]["timeout"]
+        .as_u64()
+        .expect("a timeout on the harness server");
+    // Claude Code drops an HTTP tool call quiet for five minutes unless the server sets
+    // its own timeout; a synchronous `delegate` is quiet until its worker finishes.
+    assert!(timeout >= 60 * 60 * 1000, "{timeout}ms");
+    server.shutdown().await;
+}

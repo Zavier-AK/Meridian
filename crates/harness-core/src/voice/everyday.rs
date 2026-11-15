@@ -611,15 +611,16 @@ fn system(n: &str) -> Option<VoiceAction> {
         ],
     ) {
         SystemControl::SleepDisplay
-    } else if let Some(rest) = starts_any(
-        n,
-        &[
-            "set the volume to",
-            "set volume to",
-            "volume to",
-            "turn the volume to",
-        ],
-    ) {
+    } else {
+        let rest = starts_any(
+            n,
+            &[
+                "set the volume to",
+                "set volume to",
+                "volume to",
+                "turn the volume to",
+            ],
+        )?;
         let percent: u8 = rest
             .trim_end_matches(" percent")
             .trim_end_matches('%')
@@ -629,8 +630,6 @@ fn system(n: &str) -> Option<VoiceAction> {
         SystemControl::SetVolume {
             percent: percent.min(100),
         }
-    } else {
-        return None;
     };
     Some(VoiceAction::System { control })
 }

@@ -192,6 +192,10 @@ pub struct NoteWriteParams {
     pub mode: Option<String>,
 }
 
+/// How long the head agent's CLI waits on one of these tools, in milliseconds: three
+/// hours. See [`McpServer::claude_mcp_config_with`].
+pub const TOOL_TIMEOUT_MS: u64 = 3 * 60 * 60 * 1000;
+
 #[derive(Clone)]
 pub struct HarnessTools {
     harness: Arc<Harness>,
@@ -550,7 +554,12 @@ impl McpServer {
             serde_json::json!({
                 "type": "http",
                 "url": self.url(),
-                "headers": { "Authorization": format!("Bearer {}", self.token) }
+                "headers": { "Authorization": format!("Bearer {}", self.token) },
+                // A synchronous `delegate` is silent until its worker finishes. Claude
+                // Code abandons an HTTP tool call after five quiet minutes unless the
+                // server sets its own timeout, which also becomes the floor for that
+                // idle check. Long enough for any real worker, short of forever.
+                "timeout": TOOL_TIMEOUT_MS,
             }),
         );
         serde_json::json!({ "mcpServers": servers }).to_string()
