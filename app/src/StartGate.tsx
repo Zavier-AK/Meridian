@@ -5,9 +5,14 @@ import FleetSetup from "./FleetSetup";
 import type { FleetInspection, ProjectStatus, SessionInfo } from "./types";
 import { MeridianMark } from "./Brand";
 
-type Props = { onStarted: (info: SessionInfo) => void };
+type Props = {
+  onStarted: (info: SessionInfo) => void;
+  /** Why this screen is showing instead of the home chat, when it is the fallback. */
+  notice?: string;
+  onRetryHome?: () => void;
+};
 
-export default function StartGate({ onStarted }: Props) {
+export default function StartGate({ onStarted, notice, onRetryHome }: Props) {
   const [projectRoot, setProjectRoot] = useState("");
   const [status, setStatus] = useState<ProjectStatus | null>(null);
   const [fleet, setFleet] = useState<FleetInspection | null>(null);
@@ -115,6 +120,17 @@ export default function StartGate({ onStarted }: Props) {
           A head agent that plans, and a fleet of workers that do the work — on your
           subscriptions, not API billing.
         </p>
+
+        {notice && (
+          <div className="gate-notice">
+            <p className="error">{notice}</p>
+            {onRetryHome && (
+              <button className="link" onClick={onRetryHome}>
+                Try the home chat again
+              </button>
+            )}
+          </div>
+        )}
 
         <label htmlFor="project">Project directory</label>
         <div className="picker">

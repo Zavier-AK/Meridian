@@ -45,6 +45,24 @@ pub const HEAD_GITHUB_READS: &[&str] = &[
     "Bash(gh api user)",
 ];
 
+/// Marks the folder Meridian opens at launch, so the head agent knows it is in the
+/// general home space rather than a project. Lives in `.harness/`, which git ignores.
+pub const HOME_MARKER: &str = ".harness/home";
+
+/// Whether `project_root` is Meridian's home folder.
+pub fn is_home(project_root: &Path) -> bool {
+    project_root.join(HOME_MARKER).is_file()
+}
+
+/// What the head agent is told when it runs in the home folder.
+pub const HOME_BRIEF: &str =
+    "\n\nWhere you are: Meridian's home space, the chat the person lands in \
+     when they open the app. It is not one of their projects; it is a folder of its own for \
+     whatever they ask that has no project yet. Answer questions directly here, and for \
+     something to be made (a script, a page, a small tool) delegate it as usual: it is \
+     built in this folder. When they talk about an existing project of theirs, tell them \
+     to open its folder with “Open a project” in the sidebar so the work happens there.";
+
 /// What the head agent is told about GitHub, from what `gh` can do on this machine.
 pub fn github_brief(state: crate::publish::GhState, login: Option<&str>) -> String {
     use crate::publish::GhState;
@@ -356,6 +374,9 @@ impl Orchestrator {
             brief.push_str(&notes.head_context(project_root));
         }
         brief.push_str(&github_brief_for(project_root).await);
+        if is_home(project_root) {
+            brief.push_str(HOME_BRIEF);
+        }
 
         let run_id = format!("orchestrator-{}", harness.session_id());
         harness

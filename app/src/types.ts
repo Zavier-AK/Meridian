@@ -101,6 +101,8 @@ export type SessionInfo = {
   roles: Role[];
   backends: DetectedBackend[];
   resumed_head_session: boolean;
+  /** Meridian's home folder, opened at launch, rather than one of the person's projects. */
+  home: boolean;
 };
 
 export type DetectedModel = {
@@ -369,6 +371,7 @@ export type ProjectView = {
   live: boolean;
   running_workers: number;
   pending_merges: number;
+  home: boolean;
 };
 
 /**
@@ -459,6 +462,8 @@ export type AppSettings = {
   /** OpenRouter models offered in the fleet editor, e.g. `qwen/qwen3-coder`. */
   openrouter_models: string[];
   notes: { enabled: boolean; folder: string | null };
+  /** The folder the app opens at launch; `null` is `~/Documents/Meridian Home`. */
+  home_folder?: string | null;
 };
 
 export type NoteInfo = { path: string; title: string; modified: number; bytes: number };

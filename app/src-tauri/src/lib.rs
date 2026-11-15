@@ -149,6 +149,8 @@ pub struct SessionInfo {
     roles: Vec<RoleView>,
     backends: Vec<DetectedBackend>,
     resumed_head_session: bool,
+    /// The home folder Meridian opens at launch, rather than one of the person's projects.
+    home: bool,
 }
 
 /// One open project, as the switcher sees it.
@@ -161,6 +163,7 @@ pub struct ProjectView {
     live: bool,
     running_workers: usize,
     pending_merges: usize,
+    home: bool,
 }
 
 #[derive(Serialize)]
@@ -459,6 +462,49 @@ async fn make_first_commit(project_root: String) -> Result<bool, String> {
     set_up_git(&PathBuf::from(project_root)).await
 }
 
+/// What the home folder's README says, for anyone who finds it in Finder.
+const HOME_README: &str = "# Meridian Home\n\n\
+This is the folder Meridian opens when you start it, for chats that aren't about one of \
+your projects yet. Anything the agents make from those chats is built here, on its own \
+git history, so nothing lands without your say-so.\n\n\
+To work on a project, open its folder from Meridian's sidebar.\n";
+
+/// Make sure the home folder is ready to work in: a git repository with a first commit,
+/// a fleet, and the marker that tells the head agent where it is.
+pub(crate) async fn prepare_home(root: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(root).map_err(|e| format!("creating {}: {e}", root.display()))?;
+    let readme = root.join("README.md");
+    if !readme.exists() {
+        std::fs::write(&readme, HOME_README)
+            .map_err(|e| format!("writing {}: {e}", readme.display()))?;
+    }
+    let roles = root.join("roles.toml");
+    if !roles.exists() {
+        std::fs::write(&roles, DEFAULT_ROLES)
+            .map_err(|e| format!("writing {}: {e}", roles.display()))?;
+    }
+    set_up_git(root).await?;
+    let marker = root.join(harness_core::orchestrator::HOME_MARKER);
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if !marker.exists() {
+        std::fs::write(&marker, "").map_err(|e| format!("writing {}: {e}", marker.display()))?;
+    }
+    Ok(())
+}
+
+/// Open the home folder, creating it the first time, so there is a chat to type into the
+/// moment the app opens.
+#[tauri::command]
+async fn open_home(app: AppHandle, state: State<'_, AppState>) -> Result<SessionInfo, String> {
+    let root = settings::load()
+        .home_folder()
+        .ok_or("could not work out where the home folder goes: HOME is not set")?;
+    prepare_home(&root).await?;
+    start_session(app, state, root.display().to_string(), None, None).await
+}
+
 /// Write the default fleet into a project that has none.
 #[tauri::command]
 async fn write_default_roles(project_root: String) -> Result<String, String> {
@@ -700,6 +746,7 @@ async fn start_session(
         mcp_url: orchestrator.mcp_url(),
         backends: harness_core::detection::detect_backends().await,
         resumed_head_session,
+        home: harness_core::orchestrator::is_home(&project),
         roles: harness
             .list_roles_probed()
             .await
@@ -743,6 +790,7 @@ async fn describe(key: &str, session: &Session) -> SessionInfo {
         backends: harness_core::detection::detect_backends().await,
         // True only of a fresh start; re-focusing an open project is not a resume.
         resumed_head_session: false,
+        home: harness_core::orchestrator::is_home(&session.project_root),
         roles: session
             .harness
             .list_roles_probed()
@@ -1822,19 +1870,26 @@ async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectView>, S
     let mut out = Vec::new();
     for (key, session) in projects.iter() {
         let workers = session.harness.workers().await;
+        let home = harness_core::orchestrator::is_home(&session.project_root);
         out.push(ProjectView {
             project_root: key.clone(),
-            name: PathBuf::from(key)
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| key.clone()),
+            name: if home {
+                "Home".to_string()
+            } else {
+                PathBuf::from(key)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| key.clone())
+            },
             active: active.as_deref() == Some(key.as_str()),
             live: session.is_live(),
             running_workers: workers.iter().filter(|w| !w.status.is_terminal()).count(),
             pending_merges: session.harness.pending_merges().await.len(),
+            home,
         });
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
+    // Home first, then projects by name.
+    out.sort_by(|a, b| b.home.cmp(&a.home).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
 }
 
@@ -2365,6 +2420,7 @@ pub fn run() {
             inspect_project,
             write_default_roles,
             make_first_commit,
+            open_home,
             answer_permission,
             revise_worker,
             changes_overview,
@@ -2498,6 +2554,29 @@ mod tests {
         assert!(!set_up_git(root).await.unwrap());
         let status = inspect_project(root.display().to_string()).await;
         assert!(status.is_git_repo && status.has_commits);
+    }
+
+    #[tokio::test]
+    async fn the_home_folder_is_made_ready_to_chat_in_and_left_alone_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Meridian Home");
+
+        prepare_home(&root).await.unwrap();
+        assert!(harness_core::orchestrator::is_home(&root));
+        assert!(RoleRegistry::load(root.join("roles.toml")).is_ok());
+        let tracked = run_git(&root, &["ls-files"]).await.unwrap();
+        let tracked: Vec<&str> = tracked.lines().collect();
+        assert_eq!(tracked, vec![".gitignore", "README.md", "roles.toml"]);
+
+        // A second launch keeps whatever the person changed.
+        std::fs::write(root.join("README.md"), "mine\n").unwrap();
+        prepare_home(&root).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("README.md")).unwrap(),
+            "mine\n"
+        );
+        // A plain project is never mistaken for home.
+        assert!(!harness_core::orchestrator::is_home(dir.path()));
     }
 
     #[test]

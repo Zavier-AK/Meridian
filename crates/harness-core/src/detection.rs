@@ -129,8 +129,9 @@ fn openrouter_backend(
             Some(KeySource::Environment) => {
                 format!("OpenRouter key from OPENROUTER_API_KEY — {chosen}")
             }
-            None => "OpenRouter: no key — add one in Settings → OpenRouter (billed per token)"
-                .into(),
+            None => {
+                "OpenRouter: no key — add one in Settings → OpenRouter (billed per token)".into()
+            }
         },
         base_url: Some(crate::openrouter::API_BASE.into()),
         models: models
@@ -668,8 +669,7 @@ mod tests {
         assert!(roles
             .iter()
             .flat_map(|r| &r.options)
-            .all(|o| o.provider != "openrouter"
-                && o.base_url.as_deref() != Some(API_BASE)));
+            .all(|o| o.provider != "openrouter" && o.base_url.as_deref() != Some(API_BASE)));
     }
 
     #[test]

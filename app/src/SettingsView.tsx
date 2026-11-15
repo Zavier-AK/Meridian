@@ -147,6 +147,33 @@ export default function SettingsView({ onSaved, onClose }: Props) {
       </div>
 
       <div className="settings-section">
+        <h3>Home</h3>
+        <p className="muted">
+          The folder Meridian opens at launch, for chats that aren't about one of your projects yet.
+          Anything the agents build from those chats goes here, on its own git history. Takes effect
+          the next time Meridian starts.
+        </p>
+        <div className="inline-form">
+          <input
+            className="grow mono"
+            value={settings.home_folder ?? ""}
+            onChange={(event) => update({ home_folder: event.target.value || null })}
+            placeholder="~/Documents/Meridian Home"
+            aria-label="Home folder"
+            spellCheck={false}
+          />
+          <button
+            onClick={async () => {
+              const picked = await openDialog({ directory: true, multiple: false, title: "Choose a home folder" });
+              if (typeof picked === "string") update({ home_folder: picked });
+            }}
+          >
+            Choose…
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-section">
         <h3>Notes</h3>
         <p className="muted">
           What agents learn in one project, kept for the next: decisions, conventions, gotchas.

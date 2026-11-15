@@ -168,6 +168,8 @@ export default function App() {
   const [changesKey, setChangesKey] = useState(0);
   // False only once checked: a repository with no commits, where workers can't start.
   const [hasCommits, setHasCommits] = useState(true);
+  /** Why the home chat couldn't open at launch; `null` while it is opening or open. */
+  const [homeError, setHomeError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session?.project_root) {
@@ -388,6 +390,30 @@ export default function App() {
     }
   }, []);
 
+  /** Open (creating if need be) the home folder, the chat the app lands in. */
+  const openHome = useCallback(async () => {
+    setHomeError(null);
+    try {
+      const info = await invoke<SessionInfo>("open_home");
+      startFirst(info);
+      setView("session");
+      setActivePane("chat");
+      await refreshProjects();
+    } catch (err) {
+      setHomeError(String(err));
+    }
+    // `startFirst` only sets state; it is safe to leave out of the dependencies.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshProjects]);
+
+  // At launch: straight into the home chat, no folder to pick first.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current) return;
+    opened.current = true;
+    void openHome();
+  }, [openHome]);
+
   /** Switch projects, resetting the panes that belong to the one being left. */
   const focusProject = useCallback(
     async (projectRoot: string) => {
@@ -422,7 +448,14 @@ export default function App() {
       // one, or all the way to the start gate.
       if (session?.project_root === projectRoot) {
         if (remaining.length > 0) await focusProject(remaining[0].project_root);
-        else setSession(null);
+        else {
+          // Nothing left open: back to the home chat rather than an empty window.
+          setSession(null);
+          setChat([]);
+          setWorkers({});
+          headRun.current = null;
+          void openHome();
+        }
       }
     },
     [session, focusProject],
@@ -761,6 +794,11 @@ export default function App() {
   function startFirst(info: SessionInfo) {
     setSession(info);
     const blocked = info.roles.filter((r) => !r.available);
+    // Home is where the app opens: a status line there is noise, so only problems show.
+    if (info.home) {
+      setChat(groupByReason(blocked));
+      return;
+    }
     setChat([
       {
         kind: "notice",
@@ -864,8 +902,29 @@ export default function App() {
   };
 
   if (!session) {
+    // Straight into the home chat; the folder picker is only the fallback when home
+    // could not start (no Claude CLI, say), and says why.
+    if (homeError === null) {
+      return (
+        <main className="gate opening">
+          <div className="window-drag" data-tauri-drag-region />
+          <div className="opening-mark">
+            <MeridianMark size={56} />
+            <span className="muted">Starting Meridian…</span>
+          </div>
+        </main>
+      );
+    }
     return (
-      <StartGate onStarted={startFirst} />
+      <StartGate
+        notice={`The home chat could not start: ${homeError}`}
+        onRetryHome={() => void openHome()}
+        onStarted={(info) => {
+          setHomeError(null);
+          startFirst(info);
+          void refreshProjects();
+        }}
+      />
     );
   }
 
@@ -1193,6 +1252,7 @@ export default function App() {
                 }}
                 onPermission={(id, decision) => void answerPermission(id, decision)}
                 model={headModel}
+                home={session.home}
                 promptTokens={headPrompt}
                 tools={
                   <>

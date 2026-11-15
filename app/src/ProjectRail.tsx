@@ -1,3 +1,4 @@
+import { MeridianMark } from "./Brand";
 import type { ProjectView } from "./types";
 import { BranchIcon } from "./GitHubView";
 
@@ -80,8 +81,11 @@ export default function ProjectRail({
               aria-label={`${project.name}, ${projectState(project)}`}
               aria-current={project.active ? "page" : undefined}
             >
-              <span className="monogram" style={{ "--hue": hue(project.name) } as React.CSSProperties}>
-                {monogram(project.name)}
+              <span
+                className={`monogram ${project.home ? "home" : ""}`}
+                style={{ "--hue": hue(project.name) } as React.CSSProperties}
+              >
+                {project.home ? <MeridianMark size={18} /> : monogram(project.name)}
                 {project.running_workers > 0 && <span className="rail-running" aria-hidden />}
                 {project.pending_merges > 0 && (
                   <span className="rail-badge" aria-hidden>
@@ -94,14 +98,17 @@ export default function ProjectRail({
                 <span className="rail-meta">{projectState(project)}</span>
               </span>
             </button>
-            <button
-              className="rail-close"
-              onClick={() => onClose(project.project_root)}
-              aria-label={`Close ${project.name}`}
-              title="Close this project"
-            >
-              ×
-            </button>
+            {/* Home is always there to come back to; only projects close. */}
+            {!project.home && (
+              <button
+                className="rail-close"
+                onClick={() => onClose(project.project_root)}
+                aria-label={`Close ${project.name}`}
+                title="Close this project"
+              >
+                ×
+              </button>
+            )}
           </li>
         ))}
         <li>

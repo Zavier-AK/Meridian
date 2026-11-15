@@ -40,6 +40,9 @@ pub struct Settings {
     pub openrouter_models: Vec<String>,
     /// What agents learn, kept between projects.
     pub notes: NotesSettings,
+    /// The folder Meridian opens at launch, for chats that aren't about a project yet.
+    /// `None` is `~/Documents/Meridian Home`.
+    pub home_folder: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -86,6 +89,28 @@ impl Default for Settings {
             voice: crate::voice::VoiceSettings::default(),
             openrouter_models: Vec::new(),
             notes: NotesSettings::default(),
+            home_folder: None,
+        }
+    }
+}
+
+/// `~/…` spelled out, so a folder typed the short way still works.
+fn expand_home(folder: String) -> String {
+    match (folder.strip_prefix("~/"), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) => format!("{}/{rest}", home.trim_end_matches('/')),
+        _ => folder,
+    }
+}
+
+impl Settings {
+    /// The home folder: the one set, or `~/Documents/Meridian Home`.
+    pub fn home_folder(&self) -> Option<PathBuf> {
+        match &self.home_folder {
+            Some(folder) => Some(PathBuf::from(folder)),
+            None => {
+                let home = std::env::var_os("HOME").map(PathBuf::from)?;
+                Some(home.join("Documents").join("Meridian Home"))
+            }
         }
     }
 }
@@ -160,13 +185,21 @@ impl Settings {
             .take()
             .map(|f| f.trim().to_string())
             .filter(|f| !f.is_empty())
-            .map(|f| match (f.strip_prefix("~/"), std::env::var("HOME")) {
-                (Some(rest), Ok(home)) => format!("{}/{rest}", home.trim_end_matches('/')),
-                _ => f,
-            });
+            .map(expand_home);
         if let Some(folder) = &self.notes.folder {
             if !Path::new(folder).is_absolute() {
                 return Err(format!("the notes folder `{folder}` must be a full path"));
+            }
+        }
+        self.home_folder = self
+            .home_folder
+            .take()
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty())
+            .map(expand_home);
+        if let Some(folder) = &self.home_folder {
+            if !Path::new(folder).is_absolute() {
+                return Err(format!("the home folder `{folder}` must be a full path"));
             }
         }
         Ok(self)
@@ -290,6 +323,7 @@ mod tests {
                 enabled: false,
                 folder: Some("/Users/me/Vault".into()),
             },
+            home_folder: Some("/Users/me/Meridian Home".into()),
         };
         save_to(&path, &settings).unwrap();
         assert_eq!(load_from(&path), settings);

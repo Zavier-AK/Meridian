@@ -81,9 +81,8 @@ pub fn api_key() -> Option<String> {
 
 /// The key, or the error a run should fail with when there is none.
 pub fn require_key() -> Result<String> {
-    api_key().context(
-        "no OpenRouter key — add one in Settings → OpenRouter, or set OPENROUTER_API_KEY",
-    )
+    api_key()
+        .context("no OpenRouter key — add one in Settings → OpenRouter, or set OPENROUTER_API_KEY")
 }
 
 /// The last few characters, enough to tell two keys apart without showing either.
@@ -282,7 +281,10 @@ pub async fn check_key_at(base: &str, key: &str) -> Result<KeyInfo> {
     let value: Value = response.json().await.context("reading the key's details")?;
     let data = value.get("data").unwrap_or(&value);
     Ok(KeyInfo {
-        label: data.get("label").and_then(Value::as_str).map(str::to_string),
+        label: data
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         usage: data.get("usage").and_then(Value::as_f64),
         limit: data.get("limit").and_then(Value::as_f64),
         free_tier: data
@@ -342,7 +344,10 @@ mod tests {
         assert_eq!(get("ANTHROPIC_AUTH_TOKEN"), Some("sk-or-test"));
         // Empty, not absent: absent lets the CLI fall back to the Anthropic sign-in.
         assert_eq!(get("ANTHROPIC_API_KEY"), Some(""));
-        assert_eq!(get("ANTHROPIC_DEFAULT_HAIKU_MODEL"), Some("qwen/qwen3-coder"));
+        assert_eq!(
+            get("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+            Some("qwen/qwen3-coder")
+        );
         assert_eq!(get("CLAUDE_CODE_SUBAGENT_MODEL"), Some("qwen/qwen3-coder"));
         // A sign-in token in the environment must not ride along to OpenRouter.
         assert!(removed("CLAUDE_CODE_OAUTH_TOKEN"));

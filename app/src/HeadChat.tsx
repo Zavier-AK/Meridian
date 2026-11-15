@@ -36,6 +36,8 @@ type Props = {
   promptTokens?: number | null;
   /** The hold-to-talk button, beside Send. */
   mic?: React.ReactNode;
+  /** In the home chat, the welcome says so rather than talking about a project. */
+  home?: boolean;
 };
 
 /** Tool calls into the harness read as delegation, not as plumbing. */
@@ -78,6 +80,7 @@ export default function HeadChat({
   model,
   promptTokens,
   mic,
+  home,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [images, setImages] = useState<ChatImage[]>([]);
@@ -266,7 +269,11 @@ export default function HeadChat({
           <div className="chat-welcome">
             <MeridianMark size={56} />
             <span>Ready when you are.</span>
-            <span className="muted">Describe what you want built. The head agent plans it and hands it to the fleet.</span>
+            <span className="muted">
+              {home
+                ? "Ask anything, or describe something to build. To work on one of your projects, open its folder from the sidebar."
+                : "Describe what you want built. The head agent plans it and hands it to the fleet."}
+            </span>
           </div>
         )}
         <div ref={endRef} />
