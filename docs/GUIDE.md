@@ -347,6 +347,8 @@ that, what is still wrong is yours to decide.
   a revision, a pull request — a dot travels the edge it moved along, and the **What
   moved** log underneath says what it was. Click a worker to open its review.
 - **Changes panel.** The right-hand panel switches between **Workers** and **Changes**.
+  It starts folded to a strip (which still counts what's running and waiting on you);
+  **‹** opens it and **›**, which stays at the top as the panel scrolls, folds it again.
   Changes lists every file the session touched, with lines added and removed: what
   workers are writing right now, what waits for review, what landed, and what's
   uncommitted in your checkout (the head agent's own edits included). View it by file —
@@ -355,8 +357,8 @@ that, what is still wrong is yours to decide.
 - **The sidebar** is a narrow rail. Each open project is a tile with its initials. A
   green dot means workers are running there, and a number counts changes waiting for
   review, so work going on in another project stays visible. **⌘1–9** switch projects,
-  **⌘N** opens one, and **⌘\\** widens the rail to show names. GitHub, Tools & Skills and
-  Settings sit at the bottom.
+  **⌘N** opens one, and **⌘\\** widens the rail to show names. Both side panels start
+  collapsed each time the app opens. GitHub, Tools & Skills and Settings sit at the bottom.
 
 ## Repositories, branches and pull requests
 
@@ -907,8 +909,10 @@ A meter that says unknown is more useful than one that says 0%.
   message above the box (remove any with ×). The queue goes as one message, in order, as
   soon as the turn ends.
 - **New conversation**, at the right of the Chat tab, starts the head agent afresh. A long
-  conversation costs context on every turn; this drops it. A restart won't bring the old
-  one back. Workers, reviews waiting and notes carry on as before.
+  conversation costs context on every turn; this drops it from the head agent's memory,
+  and a restart won't bring it back there. The chat keeps it, though: it stays above a
+  divider, to scroll back to, after a restart too. Workers, reviews waiting and notes
+  carry on as before.
 - **Needs you**, in the title bar, appears when anything is waiting on you: the head agent
   asking to do something, delegations to approve, changes to review, a plan to run, a night
   shift's report. Each entry goes to the thing itself.
