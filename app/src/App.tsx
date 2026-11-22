@@ -13,6 +13,7 @@ import ProjectRail, { type AppView } from "./ProjectRail";
 import GitHubView, { BranchIcon, tracking } from "./GitHubView";
 import LimitsPanel from "./LimitsPanel";
 import BudgetMeter from "./BudgetMeter";
+import NeedsYou, { type NeedsYouItem } from "./NeedsYou";
 import PreviewPanel from "./PreviewPanel";
 import ToolsView from "./ToolsView";
 import AutonomyDial, { nextStop } from "./AutonomyDial";
@@ -66,6 +67,10 @@ export default function App() {
   const [rateLimited, setRateLimited] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Messages typed while the head agent was working, sent together when it finishes. */
+  const [queued, setQueued] = useState<{ text: string; shown: string; images: ChatImage[] }[]>([]);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
   const [activePane, setActivePane] = useState<"chat" | "plan" | "night" | "preview" | "flow" | "plugin">("chat");
   // What moved between you, the head agent and the workers, newest first.
   const [flows, setFlows] = useState<Flow[]>([]);
@@ -365,6 +370,23 @@ export default function App() {
   async function changeAutonomy(level: Autonomy) {
     try {
       setAutonomy(await invoke<Autonomy>("set_autonomy", { level }));
+      // Landing by itself trusts the checks; with none set up, it would never happen.
+      if ((level === "land_safe" || level === "land_most") && session) {
+        const view = await invoke<{ checks: { commands: string[]; reviewer: string | null } }>(
+          "checks_settings",
+          { projectRoot: session.project_root },
+        ).catch(() => null);
+        if (view && view.checks.commands.length === 0 && !view.checks.reviewer) {
+          setChat((prev) => [
+            ...prev,
+            {
+              kind: "notice",
+              tone: "warn",
+              text: "Nothing checks changes in this project yet, so nothing will land by itself. Add a test command or a reviewer under Change fleet › Checks before merge.",
+            },
+          ]);
+        }
+      }
     } catch (err) {
       setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]);
     }
@@ -670,6 +692,12 @@ export default function App() {
 
   /** `shown` is how it reads in the chat, when that differs — a 🎙 for what was said. */
   async function send(text: string, shown: string = text, images: ChatImage[] = []) {
+    // While the head agent is mid-turn, hold the message and send it when the turn ends,
+    // so the person can keep typing instead of waiting.
+    if (busyRef.current) {
+      setQueued((prev) => [...prev, { text, shown, images }]);
+      return;
+    }
     setChat((prev) => [...prev, { kind: "user", text: shown, images: images.map((i) => i.preview) }]);
     setBusy(true);
     try {
@@ -679,6 +707,32 @@ export default function App() {
       });
     } catch (err) {
       setBusy(false);
+      setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]);
+    }
+  }
+
+  // The turn ended: what was typed meanwhile goes now, as one message in the order written.
+  useEffect(() => {
+    if (busy || queued.length === 0) return;
+    const batch = queued;
+    setQueued([]);
+    const text = batch.map((m) => m.text).join("\n\n");
+    const shown = batch.map((m) => m.shown).join("\n\n");
+    void send(text, shown, batch.flatMap((m) => m.images));
+    // `send` reads state through refs; it is safe to leave out.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, queued]);
+
+  /** A fresh conversation with the head agent: the long one stops costing context. */
+  async function newConversation() {
+    if (!window.confirm("Start a new conversation? The head agent forgets this one. Workers, reviews waiting and notes stay as they are.")) return;
+    try {
+      await invoke("new_conversation");
+      headRun.current = null;
+      setHeadPrompt(null);
+      setQueued([]);
+      setChat([{ kind: "notice", tone: "info", text: "New conversation. Workers and reviews carry on as before." }]);
+    } catch (err) {
       setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]);
     }
   }
@@ -955,6 +1009,62 @@ export default function App() {
   }
 
   workersRef.current = workers;
+
+  // Everything waiting on the person, for the title bar's Needs you list.
+  const toChat = () => {
+    setView("session");
+    setActivePane("chat");
+  };
+  const needsYou: NeedsYouItem[] = [
+    ...chat.flatMap((item): NeedsYouItem[] =>
+      item.kind === "permission" && item.state === "waiting"
+        ? [{ key: `ask-${item.requestId}`, kind: "ask" as const, label: `The head agent wants to: ${item.description}`, open: toChat }]
+        : [],
+    ),
+    ...Object.values(workers).flatMap((worker): NeedsYouItem[] => {
+      if (worker.status === "awaiting_approval") {
+        return [{
+          key: `approve-${worker.id}`,
+          kind: "approve" as const,
+          label: `${worker.role}: ${firstLine(worker.task ?? "a delegation")}`,
+          open: () => setSelectedWorker(worker.id),
+        }];
+      }
+      const settled = worker.status === "done" || worker.status === "failed" || worker.status === "cancelled";
+      if (worker.branch && !worker.landed && settled) {
+        const files = worker.diff?.files_changed ?? 0;
+        return [{
+          key: `review-${worker.id}`,
+          kind: "review" as const,
+          label: `${worker.role}'s change, ${files} file${files === 1 ? "" : "s"}`,
+          open: () => setSelectedWorker(worker.id),
+        }];
+      }
+      return [];
+    }),
+    ...(plan?.status === "draft"
+      ? [{
+          key: `plan-${plan.id}`,
+          kind: "plan" as const,
+          label: `Run or edit "${plan.title}"`,
+          open: () => {
+            setView("session");
+            setActivePane("plan");
+          },
+        }]
+      : []),
+    ...(night && night.status !== "running" && !night.proposed_as && night.experiments.some((e) => e.kept)
+      ? [{
+          key: `night-${night.id}`,
+          kind: "night" as const,
+          label: "Its report is ready",
+          open: () => {
+            setView("session");
+            setActivePane("night");
+          },
+        }]
+      : []),
+  ];
   const enabledPlugins = plugins.filter((plugin) => plugin.state === "on");
   const pluginPanels = enabledPlugins.flatMap((plugin) =>
     (plugin.manifest?.panels ?? []).map((panel) => ({ id: `${plugin.key}#${panel.id}`, plugin, panel })),
@@ -1074,6 +1184,7 @@ export default function App() {
           </button>
         )}
         <span className="titlebar-spacer" data-tauri-drag-region />
+        <NeedsYou items={needsYou} />
         <BudgetMeter
           usage={usage}
           rateLimited={rateLimited}
@@ -1224,6 +1335,16 @@ export default function App() {
                   {entry.panel.title}
                 </button>
               ))}
+              {activePane === "chat" && chat.some((item) => item.kind === "user" || item.kind === "assistant") && (
+                <button
+                  className="new-conversation"
+                  onClick={() => void newConversation()}
+                  disabled={busy}
+                  title="Start over with a fresh conversation. Workers, reviews and notes stay as they are."
+                >
+                  New conversation
+                </button>
+              )}
             </nav>
             {openPanel && (
               <div className="tab-panel plugin-panel" role="tabpanel">
@@ -1279,6 +1400,8 @@ export default function App() {
                 onPermission={(id, decision) => void answerPermission(id, decision)}
                 model={headModel}
                 home={session.home}
+                queued={queued.map((m) => m.shown || (m.images.length ? `${m.images.length} image(s)` : ""))}
+                onUnqueue={(index) => setQueued((prev) => prev.filter((_, i) => i !== index))}
                 promptTokens={headPrompt}
                 tools={
                   <>
@@ -1303,6 +1426,12 @@ export default function App() {
                 onRun={(steps) => void runPlan(steps)}
                 onFeedback={(steps, comments, note) => void sendPlanFeedback(steps, comments, note)}
                 onDiscard={() => void discardPlan()}
+                onRetry={(stepId) => {
+                  if (!plan) return;
+                  void invoke("retry_plan_step", { planId: plan.id, stepId }).catch((err) =>
+                    setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]),
+                  );
+                }}
                 onSelectWorker={setSelectedWorker}
               />
             </div>
@@ -2002,6 +2131,10 @@ function historyToChat(events: HarnessEvent[]): ChatItem[] {
         break;
       case "head_notice":
         items.push({ kind: "notice", tone: "info", text: noticeLine(event.text) });
+        break;
+      case "conversation_reset":
+        // Only what came after the last new conversation is this conversation.
+        items = [];
         break;
       case "assistant_text":
         if (!event.partial) items.push({ kind: "assistant", text: event.text });

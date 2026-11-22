@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatItem, PermissionDecision } from "./types";
@@ -6,6 +6,17 @@ import { compactTokens } from "./types";
 import { MeridianMark } from "./Brand";
 import { MAX_IMAGES, imageFiles, prepareImage, type ChatImage } from "./images";
 import AgentShot from "./AgentShot";
+
+const REMARK_PLUGINS = [remarkGfm];
+
+/**
+ * An assistant message, rendered from markdown. Memoized on its text: while a reply
+ * streams, the chat re-renders on every token, and without this every earlier message's
+ * markdown would be parsed again each time.
+ */
+const AssistantMarkdown = memo(function AssistantMarkdown({ text }: { text: string }) {
+  return <Markdown remarkPlugins={REMARK_PLUGINS}>{text}</Markdown>;
+});
 
 type Props = {
   items: ChatItem[];
@@ -38,6 +49,9 @@ type Props = {
   mic?: React.ReactNode;
   /** In the home chat, the welcome says so rather than talking about a project. */
   home?: boolean;
+  /** Messages typed while the head agent works, waiting to go when it finishes. */
+  queued?: string[];
+  onUnqueue?: (index: number) => void;
 };
 
 /** Tool calls into the harness read as delegation, not as plumbing. */
@@ -81,6 +95,8 @@ export default function HeadChat({
   promptTokens,
   mic,
   home,
+  queued = [],
+  onUnqueue,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [images, setImages] = useState<ChatImage[]>([]);
@@ -151,7 +167,8 @@ export default function HeadChat({
 
   function submit() {
     const text = draft.trim();
-    if ((!text && images.length === 0) || busy) return;
+    // While it works the message waits in the queue below, rather than being refused.
+    if (!text && images.length === 0) return;
     onSend(text, images);
     setDraft("");
     setImages([]);
@@ -201,7 +218,7 @@ export default function HeadChat({
               // stays off — model output is never trusted as markup.
               return (
                 <div key={i} className="bubble assistant markdown">
-                  <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
+                  <AssistantMarkdown text={item.text} />
                 </div>
               );
             case "tool":
@@ -337,6 +354,24 @@ export default function HeadChat({
           </div>
         )}
         {imageError && <p className="composer-image-error">{imageError}</p>}
+        {queued.length > 0 && (
+          <ul className="queued" aria-label="Queued messages">
+            {queued.map((text, i) => (
+              <li key={i} className="queued-item">
+                <span className="queued-label">Queued</span>
+                <span className="queued-text">{text}</span>
+                <button
+                  className="queued-remove"
+                  onClick={() => onUnqueue?.(i)}
+                  aria-label="Remove this queued message"
+                  title="Don't send this"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={inputRef}
           value={draft}
@@ -358,7 +393,9 @@ export default function HeadChat({
               onStop();
             }
           }}
-          placeholder={busy ? "Working… (Esc to stop)" : "What should we build?"}
+          placeholder={
+            busy ? "Working… type to queue the next message, or Esc to stop" : "What should we build?"
+          }
           rows={2}
         />
         <div className="composer-bar">

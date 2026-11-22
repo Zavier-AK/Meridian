@@ -2367,3 +2367,237 @@ fn limits_must_leave_room_to_work() {
     let defaults = RoleRegistry::from_toml(ROLES).unwrap().limits;
     assert!(defaults.max_parallel_workers >= 2 && defaults.worker_timeout_mins >= 30);
 }
+
+#[tokio::test]
+async fn the_head_agent_can_send_a_change_back_twice_and_hears_how_it_went() {
+    let f = fixture().await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:a.txt:one", vec![])
+        .await
+        .unwrap();
+    f.harness.request_merge(&record.id).await.unwrap();
+    checks_settle(&f.harness, &record.id).await;
+
+    for n in 1..=2u32 {
+        let revision = f
+            .harness
+            .revise_from_head(&record.id, &format!("MOCK-SH:echo {n} > fix{n}.txt"))
+            .await
+            .unwrap();
+        assert_eq!(revision, n);
+        let after = finished(&f, &record.id).await;
+        assert!(after
+            .diff
+            .as_ref()
+            .unwrap()
+            .files
+            .contains(&format!("fix{n}.txt")));
+        assert!(
+            f.harness.take_reportable(&record.id).await,
+            "the head agent is told when its revision finishes"
+        );
+        checks_settle(&f.harness, &record.id).await;
+    }
+    let err = f
+        .harness
+        .revise_from_head(&record.id, "once more")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("sent back 2 times"), "{err}");
+}
+
+#[tokio::test]
+async fn a_workers_transcript_is_kept_trimmed_and_replayed() {
+    let mut f = fixture().await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:a.txt:one", vec![])
+        .await
+        .unwrap();
+    // The app passes every event through `note_event`; do the same here.
+    for event in drain(&mut f.events) {
+        f.harness.note_event(&event).await;
+    }
+    let big = HarnessEvent::ToolCall {
+        run_id: record.id.clone(),
+        tool_use_id: "t9".into(),
+        name: "Write".into(),
+        input: serde_json::json!({ "file_path": "big.txt", "content": "x".repeat(20_000) }),
+    };
+    f.harness.note_event(&big).await;
+
+    let snapshot = f.harness.snapshot_events().await;
+    let calls: Vec<&serde_json::Value> = snapshot
+        .iter()
+        .filter_map(|e| match e {
+            HarnessEvent::ToolCall { run_id, input, .. } if run_id == &record.id => Some(input),
+            _ => None,
+        })
+        .collect();
+    assert!(!calls.is_empty(), "the worker's tool calls come back");
+    let last = calls.last().unwrap();
+    assert_eq!(last["file_path"], "big.txt", "what it was for is kept");
+    assert!(last.get("content").is_none(), "the file itself is not");
+}
+
+#[tokio::test]
+async fn a_failed_step_can_be_retried_and_the_next_step_hears_what_it_did() {
+    use harness_core::plan::{PlanStatus, StepState};
+    let f = fixture_with(&with_verify("commands = [\"true\"]")).await;
+    f.harness.set_autonomy(Autonomy::LandSafe).await;
+    let plan = f
+        .harness
+        .propose_plan(
+            "Chain",
+            "",
+            vec![
+                // Fails until go.txt is on the branch it starts from.
+                plan_step("a", "MOCK-SH:test -f go.txt && echo made > a.md", &[]),
+                plan_step("b", "WRITE:b.md:after a", &["a"]),
+            ],
+        )
+        .await
+        .unwrap();
+    f.harness.run_plan(&plan.id, None).await.unwrap();
+    let done = plan_until(&f, &plan.id, |p| p.status == PlanStatus::Finished).await;
+    assert_eq!(done.steps[0].state, StepState::Failed);
+    assert_eq!(done.steps[1].state, StepState::Skipped);
+    // Only a failed step can be retried.
+    assert!(f.harness.retry_step(&plan.id, "b").await.is_err());
+
+    // Fix what it needed, then retry: it runs again, and so does what it held up.
+    std::fs::write(f.root.join("go.txt"), "go\n").unwrap();
+    git(&f.root, &["add", "go.txt"]).await;
+    git(&f.root, &["commit", "-q", "-m", "go"]).await;
+    let first = done.steps[0].worker_id.clone();
+    f.harness.retry_step(&plan.id, "a").await.unwrap();
+
+    let done = plan_until(&f, &plan.id, |p| p.status == PlanStatus::Finished).await;
+    assert!(
+        done.steps.iter().all(|s| s.state == StepState::Landed),
+        "{done:?}"
+    );
+    assert_ne!(done.steps[0].worker_id, first, "a fresh worker");
+    let b = f
+        .harness
+        .worker(done.steps[1].worker_id.as_ref().unwrap())
+        .await
+        .unwrap();
+    assert!(b.task.contains("builds on earlier steps"), "{}", b.task);
+    assert!(
+        b.task.contains("a.md"),
+        "the files step a changed: {}",
+        b.task
+    );
+}
+
+#[tokio::test]
+async fn sending_back_a_change_that_conflicts_resolves_it_against_the_checkout() {
+    let mut f = fixture_with(&passing_verify()).await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:README.md:from the worker", vec![])
+        .await
+        .unwrap();
+    std::fs::write(f.root.join("README.md"), "from the person\n").unwrap();
+    git(&f.root, &["commit", "-q", "-am", "edit"]).await;
+    f.harness.request_merge(&record.id).await.unwrap();
+    let (_, report) = verification_of(&mut f, &record.id).await;
+    assert!(report.checks.iter().any(|c| c.name == "Merge"));
+
+    // The pass that resolves it: the worker writes both sides into the file.
+    f.harness
+        .revise(
+            &record.id,
+            "resolve it MOCK-SH:printf 'from the person and the worker\\n' > README.md",
+            &[],
+        )
+        .await
+        .unwrap();
+    let after = finished(&f, &record.id).await;
+    assert!(!after.is_error, "{}", after.summary);
+    let (_, report) = verification_of(&mut f, &record.id).await;
+    assert!(
+        !report.checks.iter().any(|c| c.name == "Merge"),
+        "it merges cleanly now: {report:?}"
+    );
+    f.harness.approve_merge(&record.id).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("README.md")).unwrap(),
+        "from the person and the worker\n"
+    );
+}
+
+#[tokio::test]
+async fn conflict_markers_left_behind_are_backed_out_not_landed() {
+    let mut f = fixture_with(&passing_verify()).await;
+    let record = f
+        .harness
+        .delegate("local_builder", "WRITE:README.md:from the worker", vec![])
+        .await
+        .unwrap();
+    std::fs::write(f.root.join("README.md"), "from the person\n").unwrap();
+    git(&f.root, &["commit", "-q", "-am", "edit"]).await;
+    f.harness.request_merge(&record.id).await.unwrap();
+    verification_of(&mut f, &record.id).await;
+
+    // A pass that ignores the conflict.
+    f.harness
+        .revise(&record.id, "MOCK-SH:echo unrelated > other.txt", &[])
+        .await
+        .unwrap();
+    let after = finished(&f, &record.id).await;
+    assert!(after.is_error);
+    assert!(after.summary.contains("backed out"), "{}", after.summary);
+    assert!(
+        !f.harness
+            .workspaces()
+            .merges_cleanly(record.branch.as_deref().unwrap())
+            .await
+    );
+}
+
+#[tokio::test]
+async fn new_work_waits_once_the_five_hour_budget_is_spent() {
+    let f = fixture_with(&format!("{ROLES}\n[limits]\nbudget_tokens_5h = 10000\n")).await;
+    // Under budget: work starts.
+    f.harness
+        .delegate("local_builder", "WRITE:a.txt:a", vec![])
+        .await
+        .unwrap();
+
+    f.harness
+        .register_orchestrator("orchestrator-s1", Some("sonnet"))
+        .await;
+    f.harness
+        .note_event(&HarnessEvent::RunFinished {
+            run_id: "orchestrator-s1".into(),
+            text: "planned".into(),
+            usage: harness_core::event::Usage {
+                input_tokens: 100,
+                output_tokens: 900,
+                cache_creation_input_tokens: 9_500,
+                // Cache reads are cheap and don't count against it.
+                cache_read_input_tokens: 5_000_000,
+            },
+            cost_usd: None,
+            is_error: false,
+        })
+        .await;
+    // The head's turn, plus the little the mock worker reports; none of the cache reads.
+    let spent = f.harness.fresh_tokens_5h().await;
+    assert!((10_500..20_000).contains(&spent), "{spent}");
+
+    let err = f
+        .harness
+        .delegate("local_builder", "WRITE:b.txt:b", vec![])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("budget is spent"), "{err}");
+    assert!(f
+        .harness
+        .delegate_async("local_builder", "WRITE:c.txt:c", vec![])
+        .await
+        .is_err());
+}

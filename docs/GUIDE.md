@@ -71,6 +71,7 @@ a first-class tool call:
 | `check_workers` | A short status of workers still running and the latest finished |
 | `collect` | Read a finished worker's result and diff |
 | `request_merge` | **Propose** landing a branch — never lands it |
+| `revise` | Send a finished worker's change back to it, on the same branch, with what to fix (at most twice per change) |
 
 Nothing has to poll. When a worker started with `delegate_async` (or one you approved under
 *Ask*) finishes, Meridian sends the head agent a notice with how it went. The chat shows
@@ -91,7 +92,12 @@ by default.
 [limits]
 max_parallel_workers = 4   # more than this wait as queued
 worker_timeout_mins  = 90  # a worker running longer is stopped
+# budget_tokens_5h   = 3000000  # optional: refuse new workers past this in any 5 hours
 ```
+
+The budget counts fresh tokens in this project (input, cache writes and output; cache reads
+cost a tenth and aren't counted). Once it's spent, new delegations and plan steps are
+refused with the reason, which the head agent passes on; work already running finishes.
 
 A worker stopped by the time limit fails with a note saying so, and whatever it wrote is
 kept on its branch to review, as when you stop one yourself.
@@ -255,6 +261,12 @@ agent's beside its model in the chat box, so a change that makes it grow is visi
 
 ## Verification before merge
 
+Set it up from the app: **Change fleet › Checks before merge** takes the commands, a
+reviewer, a second opinion and the time per command, and **Limits** takes how many workers
+run at once and for how long. Saving writes `[verify]` and `[limits]` in `roles.toml`,
+leaving the rest of the file as it was. Choosing *Land safe* or *Land most* with no checks
+set up tells you that nothing will land by itself until there are some.
+
 Every proposed merge is checked before it reaches you, in a fresh checkout of exactly
 what would land: the worker's branch merged with your branch as it is *now*, not as it was
 when the worker started. Two changes that each pass alone can break together, and this is
@@ -315,7 +327,16 @@ A finished change doesn't have to be all or nothing. In the review drawer:
   the branch with your own git credentials and opens GitHub's filled-in page in your
   browser to finish. A remote that isn't GitHub just gets the branch.
 
-Both are your clicks only: like merging, neither is a tool the head agent can call.
+- **Resolve the conflict.** A change whose **Merge** check failed (it no longer merges with
+  your branch) offers this button. Any pass on such a branch, this one or a Send back,
+  first merges your branch into it. The worker is told which files conflict and resolves
+  them. If it leaves conflict markers behind, the merge is backed out and the branch is
+  left as it was, so markers never land.
+
+Opening a pull request is your click only: like merging, it isn't a tool the head agent can
+call. The head agent can send a change back itself with `revise`, typically when its checks
+failed. That is refused while the dial is on *Ask*, and allowed twice per change; after
+that, what is still wrong is yours to decide.
 
 ## Seeing the whole picture
 
@@ -435,12 +456,15 @@ markdown". The running view is borrowed from Vibe Kanban's lanes.
 - **Once running**, the harness drives the plan itself, with no head-agent turns:
   - steps with nothing to wait for start together, each in its own worktree;
   - a step that depends on another starts only after that one has **landed**, so it
-    builds on real code on your branch, not on a branch you might still discard;
+    builds on real code on your branch, not on a branch you might still discard. Its brief
+    carries what the earlier steps reported and the files they changed;
   - the same cards move across *Up next → Running → Checking → Your review → Landed*.
 - **Every step is an ordinary worker.** Each is verified, goes through the merge gate,
   and obeys the autonomy dial. At **Land safe**, a plan can run start to finish without
   a click.
-- **If a step is discarded or fails,** anything that depends on it is skipped.
+- **If a step is discarded or fails,** anything that depends on it is skipped. **Retry**
+  on a failed step's card runs it again with a fresh worker, and the steps it held up
+  follow it; a finished plan picks up again.
 - **Stop plan** keeps unstarted steps from starting. The head agent is told how the plan
   ended, step by step.
 
@@ -838,6 +862,18 @@ visibly apart because conflating them would be worse than showing nothing:
 Quota states are `available`, `stale` and `missing`, borrowed from Codex's own `/status`.
 A meter that says unknown is more useful than one that says 0%.
 
+## The chat
+
+- **Keep typing while it works.** Enter while the head agent is mid-turn queues the
+  message above the box (remove any with ×). The queue goes as one message, in order, as
+  soon as the turn ends.
+- **New conversation**, at the right of the Chat tab, starts the head agent afresh. A long
+  conversation costs context on every turn; this drops it. A restart won't bring the old
+  one back. Workers, reviews waiting and notes carry on as before.
+- **Needs you**, in the title bar, appears when anything is waiting on you: the head agent
+  asking to do something, delegations to approve, changes to review, a plan to run, a night
+  shift's report. Each entry goes to the thing itself.
+
 ## Home
 
 Meridian opens straight into a chat. There's no folder to pick first: at launch it opens
@@ -871,11 +907,16 @@ What they do share is your subscription, so the design protects it:
   database, but the five-hour window being measured belongs to the account, so reporting
   one project's burn would understate it by however many others are open.
 
-Coming back to a project, or reopening Meridian, brings its workers back too. Finished
+Coming back to a project, or reopening Meridian, brings its workers back too, each with the
+latest lines of what it did (its transcript is saved, with tool inputs trimmed to what they
+were for). Finished
 work lives on `harness/…` branches and its story is in the project's event log. So after a
 restart, a change that was waiting for review is waiting again, with its checks if they had
 finished. A finished change that was never proposed is back on the rail, ready to propose.
-Branches Meridian has no record of are left alone.
+Branches Meridian has no record of are left alone. When a project opens, Meridian also
+deletes its own `harness/` branches that are already in your checkout (landed, or never
+changed anything) and verification checkouts more than a day old. Worker worktrees are
+never touched, since one left by a crash may hold uncommitted work.
 
 The sidebar shows running workers and waiting diffs for *every* project, not just the
 active one. That is deliberate: the most common way people lose work with tools like this

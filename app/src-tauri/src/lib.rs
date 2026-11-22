@@ -312,8 +312,9 @@ fn forward_events(
                     event: &event,
                 },
             ) {
-                tracing::warn!("dropping event, webview gone: {err}");
-                break;
+                // The window missing one event is no reason to stop: the loop also keeps
+                // the record (transcripts, usage, notices), which must go on regardless.
+                tracing::warn!("could not show an event in the window: {err}");
             }
         }
     });
@@ -341,8 +342,8 @@ async fn tell_head_about_failed_checks(
     }
     let notice = format!(
         "Checks on {worker_id}'s proposed merge failed ({}): {}. The person has not merged \
-         it. If you can fix it, delegate a fix with these findings and propose that instead; \
-         otherwise say why it should land as it is.",
+         it. If it can be fixed, send it back to the same worker with `revise` and these \
+         findings; otherwise tell the person why it should land as it is.",
         failed.join(", "),
         report.reasons.join("; ")
     );
@@ -739,6 +740,14 @@ async fn start_session(
         Ok(n) => tracing::info!("restored {n} worker(s) from earlier sessions"),
         Err(error) => tracing::warn!("could not restore earlier workers: {error:#}"),
     }
+    // Then tidy what earlier runs left: branches already in the checkout, old checkouts.
+    match harness.sweep().await {
+        Ok((0, 0)) => {}
+        Ok((branches, checkouts)) => {
+            tracing::info!("tidied {branches} merged branch(es) and {checkouts} old checkout(s)")
+        }
+        Err(error) => tracing::warn!("could not tidy old branches: {error:#}"),
+    }
     harness.set_notes(settings::load().notes.notes()).await;
     harness
         .set_autonomy(harness_core::autonomy::load(&project))
@@ -990,6 +999,21 @@ async fn run_plan(
     session
         .harness
         .run_plan(&plan_id, Some(steps))
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Run a failed plan step again; the steps it held up follow it.
+#[tauri::command]
+async fn retry_plan_step(
+    state: State<'_, AppState>,
+    plan_id: String,
+    step_id: String,
+    project: Option<String>,
+) -> Result<(), String> {
+    harness_for(&state, project)
+        .await?
+        .retry_step(&plan_id, &step_id)
         .await
         .map_err(|e| format!("{e:#}"))
 }
@@ -1557,6 +1581,27 @@ async fn reconnect_head(
     let session = projects
         .get_mut(&key)
         .ok_or("no session for that project")?;
+    relaunch_head(&app, &key, session).await
+}
+
+/// Start the head agent's conversation over: a fresh one, which a restart won't undo.
+/// Workers, reviews waiting and notes stay as they are.
+#[tauri::command]
+async fn new_conversation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<(), String> {
+    let key = key_for(&state, project).await?;
+    let mut projects = state.projects.lock().await;
+    let session = projects
+        .get_mut(&key)
+        .ok_or("no session for that project")?;
+    session
+        .harness
+        .start_new_conversation()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
     relaunch_head(&app, &key, session).await
 }
 
@@ -2401,6 +2446,51 @@ async fn role_tools(
     Ok(describe_role_tools(&registry))
 }
 
+/// The project's checks and limits, for the panel, with the roles a reviewer can be.
+#[derive(Serialize)]
+struct ChecksView {
+    checks: harness_core::roles_patch::ChecksPatch,
+    roles: Vec<String>,
+}
+
+#[tauri::command]
+async fn checks_settings(
+    state: State<'_, AppState>,
+    project_root: String,
+) -> Result<ChecksView, String> {
+    let file = roles_file_for(&state, &project_root).await;
+    let registry = RoleRegistry::load(&file).map_err(describe_error)?;
+    Ok(ChecksView {
+        checks: harness_core::roles_patch::ChecksPatch::from_registry(&registry),
+        roles: registry.roles.keys().cloned().collect(),
+    })
+}
+
+/// Write `[verify]` and `[limits]` into `roles.toml`, and apply them to the open session
+/// (the parallel limit takes effect when the project is next opened).
+#[tauri::command]
+async fn save_checks_settings(
+    state: State<'_, AppState>,
+    project_root: String,
+    checks: harness_core::roles_patch::ChecksPatch,
+) -> Result<ChecksView, String> {
+    let file = roles_file_for(&state, &project_root).await;
+    harness_core::roles_patch::apply_checks_patch_file(&file, &checks).map_err(describe_error)?;
+    let updated = RoleRegistry::load(&file).map_err(describe_error)?;
+    if let Some(session) = state
+        .projects
+        .lock()
+        .await
+        .get_mut(&project_key(&project_root))
+    {
+        session.harness.swap_registry(updated.clone()).await;
+    }
+    Ok(ChecksView {
+        checks: harness_core::roles_patch::ChecksPatch::from_registry(&updated),
+        roles: updated.roles.keys().cloned().collect(),
+    })
+}
+
 /// Rewrite one role's allow-list in `roles.toml`, and apply it to the open session.
 #[tauri::command]
 async fn save_role_tools(
@@ -2491,6 +2581,10 @@ pub fn run() {
             make_first_commit,
             open_home,
             worker_snapshot,
+            new_conversation,
+            checks_settings,
+            retry_plan_step,
+            save_checks_settings,
             answer_permission,
             revise_worker,
             changes_overview,

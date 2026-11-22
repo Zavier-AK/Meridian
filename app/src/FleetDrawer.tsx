@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import FleetSetup from "./FleetSetup";
+import ChecksPanel from "./ChecksPanel";
 import type { FleetInspection, Role } from "./types";
 
 type Props = {
@@ -71,6 +72,7 @@ export default function FleetDrawer({ projectRoot, onClose, onRolesChanged }: Pr
         {inspection && (
           <FleetSetup projectRoot={projectRoot} inspection={inspection} onSaved={saved} />
         )}
+        <ChecksPanel projectRoot={projectRoot} />
       </aside>
     </div>
   );

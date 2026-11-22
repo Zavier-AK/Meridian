@@ -318,6 +318,12 @@ pub enum HarnessEvent {
         run_id: String,
     },
 
+    /// The person started a new conversation with the head agent: what came before is
+    /// no longer its context, and the chat starts over from here.
+    ConversationReset {
+        run_id: String,
+    },
+
     /// Something the harness told the head agent on its own: a background worker
     /// finished, a plan ended, checks failed. Kept apart from [`HarnessEvent::UserMessage`]
     /// so it is never shown, or replayed, as words the person typed.
@@ -388,6 +394,7 @@ impl HarnessEvent {
             | Self::UserMessage { run_id, .. }
             | Self::HeadNotice { run_id, .. }
             | Self::HeadExited { run_id }
+            | Self::ConversationReset { run_id }
             | Self::RunFinished { run_id, .. }
             | Self::Error { run_id, .. }
             | Self::PromptSize { run_id, .. }

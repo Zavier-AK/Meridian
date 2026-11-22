@@ -89,26 +89,7 @@ pub fn apply_tools_patch(source: &str, role_name: &str, tools: &[String]) -> Res
         .position(|line| line.trim() == header)
         .with_context(|| format!("roles.toml has no table `{header}`"))?;
 
-    // An array written over several lines: drop its continuation lines, so the single
-    // line written below does not leave the old entries dangling.
-    let end = table_end(&lines, start);
-    if let Some(index) = find_field(&lines, start, end, "tools") {
-        let closes = |line: &str| {
-            let code = match inline_comment(line) {
-                Some(comment) => &line[..line.len() - comment.trim_start().len()],
-                None => line,
-            };
-            code.contains(']')
-        };
-        if !closes(&lines[index]) {
-            while index + 1 < lines.len() && !closes(&lines[index + 1]) {
-                lines.remove(index + 1);
-            }
-            if index + 1 < lines.len() {
-                lines.remove(index + 1);
-            }
-        }
-    }
+    collapse_array(&mut lines, start, "tools");
 
     let end = table_end(&lines, start);
     let encoded = toml::Value::Array(
@@ -126,6 +107,155 @@ pub fn apply_tools_patch(source: &str, role_name: &str, tools: &[String]) -> Res
     }
     RoleRegistry::from_toml(&patched).context("validating updated roles.toml")?;
     Ok(patched)
+}
+
+/// An array written over several lines: drop its continuation lines, so the single line
+/// written in its place does not leave the old entries dangling.
+fn collapse_array(lines: &mut Vec<String>, start: usize, key: &str) {
+    let end = table_end(lines, start);
+    if let Some(index) = find_field(lines, start, end, key) {
+        let closes = |line: &str| {
+            let code = match inline_comment(line) {
+                Some(comment) => &line[..line.len() - comment.trim_start().len()],
+                None => line,
+            };
+            code.contains(']')
+        };
+        if !closes(&lines[index]) {
+            while index + 1 < lines.len() && !closes(&lines[index + 1]) {
+                lines.remove(index + 1);
+            }
+            if index + 1 < lines.len() {
+                lines.remove(index + 1);
+            }
+        }
+    }
+}
+
+/// What the app's Checks and limits panel sets: the `[verify]` and `[limits]` blocks.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChecksPatch {
+    pub commands: Vec<String>,
+    pub reviewer: Option<String>,
+    pub escalate_to: Option<String>,
+    pub timeout_secs: u64,
+    pub max_parallel_workers: usize,
+    pub worker_timeout_mins: u64,
+    #[serde(default)]
+    pub budget_tokens_5h: Option<u64>,
+}
+
+impl ChecksPatch {
+    /// The panel's starting point: what the registry has now.
+    pub fn from_registry(registry: &RoleRegistry) -> Self {
+        Self {
+            commands: registry.verify.commands.clone(),
+            reviewer: registry.verify.reviewer.clone(),
+            escalate_to: registry.verify.escalate_to.clone(),
+            timeout_secs: registry.verify.timeout_secs,
+            max_parallel_workers: registry.limits.max_parallel_workers,
+            worker_timeout_mins: registry.limits.worker_timeout_mins,
+            budget_tokens_5h: registry.limits.budget_tokens_5h,
+        }
+    }
+}
+
+/// Set `[verify]` and `[limits]` from the panel, keeping the rest of the file (comments
+/// included) as it was. A block that isn't there is added at the end.
+pub fn apply_checks_patch(source: &str, patch: &ChecksPatch) -> Result<String> {
+    let commands: Vec<String> = patch
+        .commands
+        .iter()
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+    for command in &commands {
+        if command.contains('\n') || command.contains('\r') {
+            bail!("a check command must be one line");
+        }
+    }
+    let mut lines: Vec<String> = source.lines().map(str::to_string).collect();
+    let had_trailing_newline = source.ends_with('\n') || source.is_empty();
+
+    let start = section(&mut lines, "verify");
+    collapse_array(&mut lines, start, "commands");
+    let end = table_end(&lines, start);
+    let encoded = toml::Value::Array(commands.into_iter().map(toml::Value::String).collect());
+    set_raw_field(&mut lines, start, end, "commands", &encoded.to_string())?;
+    for (key, value) in [
+        ("reviewer", &patch.reviewer),
+        ("escalate_to", &patch.escalate_to),
+    ] {
+        let end = table_end(&lines, start);
+        match value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+            Some(role) => set_string_field(&mut lines, start, end, key, role)?,
+            None => remove_field(&mut lines, start, end, key),
+        }
+    }
+    let end = table_end(&lines, start);
+    set_raw_field(
+        &mut lines,
+        start,
+        end,
+        "timeout_secs",
+        &patch.timeout_secs.to_string(),
+    )?;
+
+    let start = section(&mut lines, "limits");
+    let end = table_end(&lines, start);
+    set_raw_field(
+        &mut lines,
+        start,
+        end,
+        "max_parallel_workers",
+        &patch.max_parallel_workers.to_string(),
+    )?;
+    let end = table_end(&lines, start);
+    set_raw_field(
+        &mut lines,
+        start,
+        end,
+        "worker_timeout_mins",
+        &patch.worker_timeout_mins.to_string(),
+    )?;
+    let end = table_end(&lines, start);
+    match patch.budget_tokens_5h {
+        Some(budget) => set_raw_field(
+            &mut lines,
+            start,
+            end,
+            "budget_tokens_5h",
+            &budget.to_string(),
+        )?,
+        None => remove_field(&mut lines, start, end, "budget_tokens_5h"),
+    }
+
+    let mut patched = lines.join("\n");
+    if had_trailing_newline {
+        patched.push('\n');
+    }
+    RoleRegistry::from_toml(&patched).context("validating updated roles.toml")?;
+    Ok(patched)
+}
+
+pub fn apply_checks_patch_file(path: &Path, patch: &ChecksPatch) -> Result<()> {
+    let source =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let patched = apply_checks_patch(&source, patch)?;
+    replace_file(path, &patched)
+}
+
+/// The line of a top-level `[name]` table, adding it at the end if there is none.
+fn section(lines: &mut Vec<String>, name: &str) -> usize {
+    let header = format!("[{name}]");
+    if let Some(index) = lines.iter().position(|line| line.trim() == header) {
+        return index;
+    }
+    if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+        lines.push(String::new());
+    }
+    lines.push(header);
+    lines.len() - 1
 }
 
 fn check_tool_rule(tool: &str) -> Result<()> {
@@ -450,5 +580,64 @@ provider_opts = { model_provider = "lmstudio" }
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn checks_and_limits_are_set_without_touching_the_rest() {
+        let source = "default_role = \"builder\"\n\n# my fleet\n[roles.builder]\nprovider = \"mock\"\nisolation = \"worktree\"\n\n[roles.tester]\nprovider = \"mock\"\nisolation = \"readonly\"\n\n[verify]\ncommands = [\n  \"old one\",\n]  # keep this note\n";
+        let patch = ChecksPatch {
+            commands: vec!["cargo test".into(), "  ".into()],
+            reviewer: Some("tester".into()),
+            escalate_to: None,
+            timeout_secs: 600,
+            max_parallel_workers: 2,
+            worker_timeout_mins: 45,
+            budget_tokens_5h: Some(2_000_000),
+        };
+        let patched = apply_checks_patch(source, &patch).unwrap();
+        assert!(patched.contains("# my fleet"), "{patched}");
+        let registry = RoleRegistry::from_toml(&patched).unwrap();
+        assert_eq!(registry.verify.commands, ["cargo test"]);
+        assert_eq!(registry.verify.reviewer.as_deref(), Some("tester"));
+        assert_eq!(registry.verify.timeout_secs, 600);
+        assert_eq!(registry.limits.max_parallel_workers, 2);
+        assert_eq!(registry.limits.worker_timeout_mins, 45);
+        assert_eq!(registry.limits.budget_tokens_5h, Some(2_000_000));
+        assert!(!patched.contains("old one"));
+        assert_eq!(
+            ChecksPatch::from_registry(&registry).commands,
+            ["cargo test"]
+        );
+
+        // Clearing the reviewer removes the line; a reviewer that isn't a role is refused.
+        let cleared = apply_checks_patch(
+            &patched,
+            &ChecksPatch {
+                reviewer: None,
+                ..patch.clone()
+            },
+        )
+        .unwrap();
+        assert!(RoleRegistry::from_toml(&cleared)
+            .unwrap()
+            .verify
+            .reviewer
+            .is_none());
+        assert!(apply_checks_patch(
+            source,
+            &ChecksPatch {
+                reviewer: Some("nobody".into()),
+                ..patch.clone()
+            }
+        )
+        .is_err());
+        assert!(apply_checks_patch(
+            source,
+            &ChecksPatch {
+                max_parallel_workers: 0,
+                ..patch
+            }
+        )
+        .is_err());
     }
 }

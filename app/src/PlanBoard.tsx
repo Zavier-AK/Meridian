@@ -8,6 +8,8 @@ type Props = {
   onRun: (steps: StepInput[]) => void;
   onFeedback: (steps: StepInput[], comments: { step_id: string; text: string }[], note: string) => void;
   onDiscard: () => void;
+  /** Run a failed step again, with what it held up. */
+  onRetry?: (stepId: string) => void;
   onSelectWorker: (id: string) => void;
 };
 
@@ -50,7 +52,7 @@ function inputOf(step: PlanStep): StepInput {
  * for, and a comment for the head agent. Once running, the same cards move across lanes
  * as their workers run, get checked, and land — so the plan is the progress view too.
  */
-export default function PlanBoard({ plan, roles, workers, onRun, onFeedback, onDiscard, onSelectWorker }: Props) {
+export default function PlanBoard({ plan, roles, workers, onRun, onFeedback, onDiscard, onRetry, onSelectWorker }: Props) {
   const [steps, setSteps] = useState<StepInput[]>([]);
   const [comments, setComments] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
@@ -211,29 +213,41 @@ export default function PlanBoard({ plan, roles, workers, onRun, onFeedback, onD
               {cards.map((step) => {
                 const worker = step.worker_id ? workers[step.worker_id] : undefined;
                 const verification = worker?.verification;
+                const retryable =
+                  step.state === "failed" && onRetry && (plan.status === "running" || plan.status === "finished");
                 return (
-                  <button
-                    key={step.id}
-                    className={`lane-card ${step.state}`}
-                    onClick={() => step.worker_id && onSelectWorker(step.worker_id)}
-                    disabled={!step.worker_id}
-                  >
-                    <span className="lane-card-title">{step.title}</span>
-                    <span className="muted mono lane-card-meta">
-                      {step.role} · {STATE_LABEL[step.state]}
-                    </span>
-                    {step.state === "waiting" && (
-                      <span className="muted lane-card-note">after {step.depends_on.join(", ")}</span>
-                    )}
-                    {verification?.state === "done" && (
-                      <span
-                        className={`badge risk-${verification.report.verified ? verification.report.risk : "unverified"}`}
-                      >
-                        {verification.report.verified ? `${verification.report.risk} risk` : "unverified"}
+                  <div key={step.id} className="lane-card-wrap">
+                    <button
+                      className={`lane-card ${step.state}`}
+                      onClick={() => step.worker_id && onSelectWorker(step.worker_id)}
+                      disabled={!step.worker_id}
+                    >
+                      <span className="lane-card-title">{step.title}</span>
+                      <span className="muted mono lane-card-meta">
+                        {step.role} · {STATE_LABEL[step.state]}
                       </span>
+                      {step.state === "waiting" && (
+                        <span className="muted lane-card-note">after {step.depends_on.join(", ")}</span>
+                      )}
+                      {verification?.state === "done" && (
+                        <span
+                          className={`badge risk-${verification.report.verified ? verification.report.risk : "unverified"}`}
+                        >
+                          {verification.report.verified ? `${verification.report.risk} risk` : "unverified"}
+                        </span>
+                      )}
+                      {step.note && <span className="lane-card-note">{step.note}</span>}
+                    </button>
+                    {retryable && (
+                      <button
+                        className="lane-retry"
+                        onClick={() => onRetry(step.id)}
+                        title="Run this step again with a fresh worker; the steps it held up run after it"
+                      >
+                        Retry
+                      </button>
                     )}
-                    {step.note && <span className="lane-card-note">{step.note}</span>}
-                  </button>
+                  </div>
                 );
               })}
             </div>

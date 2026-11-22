@@ -29,6 +29,8 @@ const ME_CAP: usize = 2_000;
 const PROJECT_CAP: usize = 3_000;
 /// What one read returns at most.
 const READ_CAP: usize = 12_000;
+/// How much of the project's note a worker's brief carries.
+const WORKER_PROJECT_CAP: usize = 1_500;
 /// What one note may hold. A note this long has stopped being a note.
 const WRITE_CAP: usize = 16_000;
 const SNIPPET: usize = 220;
@@ -176,6 +178,33 @@ impl Notes {
             )),
         }
         out
+    }
+
+    /// What a worker is given from the notes with its task: this project's note, cut
+    /// short, and snippets of other notes that clearly bear on the task. Workers can't
+    /// reach the notes folder themselves, so the text travels in the brief, kept small.
+    /// Empty when nothing applies.
+    pub fn worker_context(&self, task: &str, project_root: &Path) -> String {
+        let mut out = String::new();
+        let project = Self::project_note(project_root);
+        if let Some(note) = self.read_meaningful(&project) {
+            out.push_str("This project's conventions and decisions, from its notes:\n");
+            out.push_str(&cut(&note, WORKER_PROJECT_CAP));
+        }
+        let hits = self.recall(task, project_root, &Default::default());
+        if !hits.is_empty() {
+            if !out.is_empty() {
+                out.push_str("\n\n");
+            }
+            out.push_str("Notes from earlier work that may bear on this task:");
+            for hit in hits {
+                out.push_str(&format!("\n- {}: {}", hit.title, hit.snippet));
+            }
+        }
+        if out.is_empty() {
+            return out;
+        }
+        format!("<notes>\n{out}\n</notes>")
     }
 
     /// A note's text, if it says anything beyond headings and comments.
@@ -714,5 +743,39 @@ mod tests {
             "projects/local-harness.md"
         );
         assert_eq!(Notes::project_note(Path::new("/")), "projects/project.md");
+    }
+
+    #[test]
+    fn a_worker_gets_the_project_note_and_strong_matches_only() {
+        let (_dir, notes) = vault();
+        let project = std::path::Path::new("/work/calendar-system");
+        assert_eq!(
+            notes.worker_context("anything", project),
+            "",
+            "nothing to give"
+        );
+
+        notes
+            .write(
+                "projects/calendar-system.md",
+                "# calendar-system\n\nDates are stored in UTC; format them only in the view.\n",
+                WriteMode::Replace,
+            )
+            .unwrap();
+        notes
+            .write(
+                "topics/tauri-gotchas.md",
+                "# Tauri gotchas\n\nTauri window dragging needs data-tauri-drag-region on the strip; tauri window dragging breaks inside buttons.\n",
+                WriteMode::Replace,
+            )
+            .unwrap();
+        let given = notes.worker_context("fix tauri window dragging in the title bar", project);
+        assert!(given.contains("stored in UTC"), "{given}");
+        assert!(given.contains("Tauri gotchas"), "{given}");
+        let unrelated = notes.worker_context("rename a css class", project);
+        assert!(
+            unrelated.contains("stored in UTC") && !unrelated.contains("Tauri"),
+            "{unrelated}"
+        );
     }
 }

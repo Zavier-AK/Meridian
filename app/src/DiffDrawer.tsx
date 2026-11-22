@@ -131,6 +131,23 @@ export default function DiffDrawer({ worker, onClose, onApprove, onReject, onUnd
     }
   }
 
+  /** Send it back to resolve the conflict with what has landed since it started. */
+  async function resolveConflict() {
+    setSending(true);
+    setReviseError(null);
+    try {
+      await invoke<number>("revise_worker", {
+        workerId: worker.id,
+        note: "Your change no longer merges with my branch. Resolve the merge conflicts, keeping what both sides meant, and change nothing else.",
+        comments: [],
+      });
+    } catch (err) {
+      setReviseError(String(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
   // Events fill this in live; asking covers a drawer opened after they went by.
   const [fetched, setFetched] = useState<Verification | null>(null);
   useEffect(() => {
@@ -231,7 +248,17 @@ export default function DiffDrawer({ worker, onClose, onApprove, onReject, onUnd
           </section>
         )}
 
-        {verification && <VerificationSection verification={verification} />}
+        {verification && (
+          <VerificationSection
+            verification={verification}
+            onResolve={
+              worker.status === "done" || worker.status === "failed"
+                ? () => void resolveConflict()
+                : undefined
+            }
+            resolving={sending}
+          />
+        )}
 
         {diff && diff.files_changed > 0 ? (
           <section className="diff-section">
@@ -698,8 +725,18 @@ function shown(check: VerifyCheck): Shown {
  * The level is the first thing read, so it leads — but "unverified" is never dressed up
  * as low risk: a change nothing checked says so.
  */
-function VerificationSection({ verification }: { verification: Verification }) {
+function VerificationSection({
+  verification,
+  onResolve,
+  resolving,
+}: {
+  verification: Verification;
+  /** Offered when the change no longer merges: send it back to resolve the conflict. */
+  onResolve?: () => void;
+  resolving?: boolean;
+}) {
   const checks = verification.state === "done" ? verification.report.checks : verification.checks;
+  const conflicted = checks.some((check) => check.name === "Merge" && check.status === "failed");
   return (
     <section className="verification">
       <h3>
@@ -736,6 +773,16 @@ function VerificationSection({ verification }: { verification: Verification }) {
                 <span className="muted"> — {check.summary}</span>
               </div>
               {check.reviewer && <div className="muted mono check-by">{check.reviewer}</div>}
+              {conflicted && onResolve && check.name === "Merge" && check.status === "failed" && (
+                <button
+                  className="check-resolve"
+                  onClick={onResolve}
+                  disabled={resolving}
+                  title="The worker takes in what landed since it started and resolves the conflicts; its change is checked again after"
+                >
+                  {resolving ? "Sending…" : "Resolve the conflict"}
+                </button>
+              )}
               {check.findings && check.findings.length > 0 && (
                 <ul className="findings">
                   {check.findings.map((finding, j) => (

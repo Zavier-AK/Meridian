@@ -89,6 +89,9 @@ commands = []
 #                          same subscription.
 #   worker_timeout_mins  — a worker running longer is stopped, and what it
 #                          wrote is kept on its branch to review.
+#   budget_tokens_5h     — optional: fresh tokens (input, cache writes and
+#                          output; not cache reads) this project may spend in
+#                          any five hours before new workers are refused.
 # ---------------------------------------------------------------------------
 
 [limits]
