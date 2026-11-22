@@ -522,21 +522,49 @@ async fn start_night(
             .map(|r| r.name.to_string())
             .ok_or("no role can edit files, so the night shift has nobody to make changes")?,
     };
-    let config: harness_core::night::NightConfig = serde_json::from_value(serde_json::json!({
+    let config = score_night(goal, metric, higher_is_better, guard, role)?;
+    crate::start_night(app.state::<AppState>(), config, None).await?;
+    Ok(Some("The night shift has started.".into()))
+}
+
+/// The night shift the voice agent starts: one goal, kept only when the score improves.
+fn score_night(
+    goal: &str,
+    metric: &str,
+    higher_is_better: bool,
+    guard: &Option<String>,
+    role: String,
+) -> Result<harness_core::night::NightConfig, String> {
+    serde_json::from_value(serde_json::json!({
+        "mode": "metric",
         "goal": goal,
         "metric": metric,
         "direction": if higher_is_better { "higher" } else { "lower" },
         "guard": guard,
         "role": role,
     }))
-    .map_err(|e| e.to_string())?;
-    crate::start_night(app.state::<AppState>(), config, None).await?;
-    Ok(Some("The night shift has started.".into()))
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_voice_agent_starts_a_score_night() {
+        let config = score_night(
+            "make the build faster",
+            "npm run bench",
+            false,
+            &Some("npm test".into()),
+            "builder".into(),
+        )
+        .unwrap();
+        assert_eq!(config.mode, harness_core::night::NightMode::Metric);
+        assert_eq!(config.metric, "npm run bench");
+        assert_eq!(config.direction, harness_core::night::Direction::Lower);
+        assert_eq!(config.guard.as_deref(), Some("npm test"));
+    }
 
     #[test]
     fn settings_change_by_key_in_plain_words() {

@@ -1044,7 +1044,7 @@ impl VoiceTools {
 
     #[tool(
         name = "start_night_shift",
-        description = "Start the night shift now: it tries changes toward a goal while the person is away, keeping those that improve the score. Asks first. To only open its setup, use night_shift with setup."
+        description = "Start a scored night shift now: it tries changes toward a goal while the person is away, keeping those that improve the score. Asks first. For a list of tasks to build and review overnight, or to only open the setup, use night_shift with setup."
     )]
     async fn start_night_shift(&self, Parameters(p): Parameters<StartNightParams>) -> String {
         self.run(VoiceAction::StartNight {

@@ -209,7 +209,7 @@ pub enum HarnessEvent {
     },
     /// The night shift moved on: started, scored, tried something, or ended.
     NightUpdated {
-        report: crate::night::NightReport,
+        report: Box<crate::night::NightReport>,
     },
     /// Every step of a running plan reached a final state.
     PlanFinished {

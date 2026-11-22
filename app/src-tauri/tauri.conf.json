@@ -32,7 +32,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-src meridian-plugin: http://meridian-plugin.localhost"
+      "csp": "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-src meridian-plugin: http://meridian-plugin.localhost"
     },
     "macOSPrivateApi": true
   },

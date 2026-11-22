@@ -872,6 +872,30 @@ impl Workspaces {
         })
     }
 
+    /// The unified diff of what `branch` adds on top of `base` (both harness branches):
+    /// one task's change on a night branch, without the tasks before it.
+    pub async fn patch_between(&self, base: &str, branch: &str, max_lines: usize) -> Result<Patch> {
+        harness_branch(base)?;
+        harness_branch(branch)?;
+        let text = git(
+            &self.project_root,
+            &["diff", "--no-color", &format!("{base}...{branch}")],
+        )
+        .await?;
+        let total = text.lines().count();
+        let truncated = total > max_lines;
+        let text = if truncated {
+            text.lines().take(max_lines).collect::<Vec<_>>().join("\n")
+        } else {
+            text
+        };
+        Ok(Patch {
+            text,
+            truncated,
+            total_lines: total,
+        })
+    }
+
     /// Land a reviewed branch on the current checkout.
     ///
     /// Only ever called behind an explicit human approval: the orchestrator can propose a

@@ -10,9 +10,11 @@ type Props = {
   /** Why this screen is showing instead of the home chat, when it is the fallback. */
   notice?: string;
   onRetryHome?: () => void;
+  /** Shown as a dialog over the app: a close button, and clicks outside the card close it. */
+  onClose?: () => void;
 };
 
-export default function StartGate({ onStarted, notice, onRetryHome }: Props) {
+export default function StartGate({ onStarted, notice, onRetryHome, onClose }: Props) {
   const [projectRoot, setProjectRoot] = useState("");
   const [status, setStatus] = useState<ProjectStatus | null>(null);
   const [fleet, setFleet] = useState<FleetInspection | null>(null);
@@ -111,7 +113,12 @@ export default function StartGate({ onStarted, notice, onRetryHome }: Props) {
     <main className="gate">
       {/* No title bar on this screen either: the strip along the top moves the window. */}
       <div className="window-drag" data-tauri-drag-region />
-      <div className="gate-card">
+      <div className="gate-card" onClick={(event) => event.stopPropagation()}>
+        {onClose && (
+          <button className="gate-close" onClick={onClose} aria-label="Close" title="Close (Esc)">
+            ×
+          </button>
+        )}
         <div className="gate-brand">
           <MeridianMark size={44} />
           <h1>Meridian</h1>

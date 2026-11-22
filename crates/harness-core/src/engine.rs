@@ -1242,7 +1242,10 @@ impl Harness {
 
     async fn publish_night(&self, report: crate::night::NightReport) {
         *self.night.write().await = Some(report.clone());
-        self.record(HarnessEvent::NightUpdated { report }).await;
+        self.record(HarnessEvent::NightUpdated {
+            report: Box::new(report),
+        })
+        .await;
     }
 
     /// Start an improvement loop on its own branch. One per project at a time.
@@ -1270,6 +1273,7 @@ impl Harness {
             finished_at: None,
             ended_because: None,
             proposed_as: None,
+            tasks: Vec::new(),
         };
         let (stop, stopped) = tokio::sync::watch::channel(false);
         *self.night_stop.write().await = Some(stop);
@@ -1371,7 +1375,390 @@ impl Harness {
         result
     }
 
-    async fn run_night(self: Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) {
+    async fn run_night(self: Arc<Self>, stop: tokio::sync::watch::Receiver<bool>) {
+        let review = matches!(
+            self.night_report().await,
+            Some(report) if report.config.mode == crate::night::NightMode::Review
+        );
+        if review {
+            self.run_night_review(stop).await
+        } else {
+            self.run_night_metric(stop).await
+        }
+    }
+
+    /// Wait for a worker to settle after it was sent back: its pass over and its stop
+    /// switch gone. False if the night was stopped meanwhile (the pass is stopped too).
+    async fn settled(
+        &self,
+        worker_id: &str,
+        stop: &mut tokio::sync::watch::Receiver<bool>,
+    ) -> bool {
+        loop {
+            let running = self.cancels.read().await.contains_key(worker_id);
+            let done = self
+                .worker(worker_id)
+                .await
+                .is_none_or(|w| w.status.is_terminal());
+            if done && !running {
+                return true;
+            }
+            if *stop.borrow() {
+                self.cancel_worker(worker_id).await;
+                return false;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(400)) => {}
+                _ = stop.changed() => {}
+            }
+        }
+    }
+
+    /// Check one task of a review night: the project's commands and the reviewer, in a
+    /// fresh checkout of its branch, reviewing only what it adds on top of the night.
+    #[allow(clippy::too_many_arguments)]
+    async fn check_night_task(
+        &self,
+        checkout_id: &str,
+        night_branch: &str,
+        branch: &str,
+        task: &str,
+        summary: &str,
+        reviewer: &str,
+        commands: &[String],
+        timeout: std::time::Duration,
+    ) -> crate::verify::VerificationReport {
+        use crate::verify::{self as v, Check, CheckKind, CheckStatus};
+        let mut checks = Vec::new();
+        let patch = self
+            .workspaces
+            .patch_between(night_branch, branch, v::REVIEW_PATCH_LINES)
+            .await
+            .unwrap_or(crate::isolation::Patch {
+                text: String::new(),
+                truncated: false,
+                total_lines: 0,
+            });
+        let workspace = match self.workspaces.checkout_branch(checkout_id, branch).await {
+            Ok(workspace) => workspace,
+            Err(err) => {
+                checks.push(Check {
+                    kind: CheckKind::Command,
+                    name: "Checkout".into(),
+                    status: CheckStatus::Error,
+                    summary: format!("could not check the branch out: {err:#}"),
+                    output: None,
+                    risk: None,
+                    findings: Vec::new(),
+                    reviewer: None,
+                });
+                return v::assess(checks);
+            }
+        };
+        for command in commands {
+            checks.push(v::run_command(&workspace.cwd, command, timeout).await);
+        }
+        let role = self.registry.read().await.roles.get(reviewer).cloned();
+        match role {
+            Some(role) => {
+                let request = v::ReviewRequest {
+                    task,
+                    summary,
+                    patch: &patch.text,
+                    patch_truncated: patch.truncated,
+                    has_checkout: true,
+                };
+                let run_id = format!("review-{checkout_id}");
+                let (check, usage) = v::review(
+                    reviewer,
+                    &role,
+                    &run_id,
+                    &workspace.cwd,
+                    &v::review_prompt(&request),
+                )
+                .await;
+                if usage.total_input() + usage.output_tokens > 0 {
+                    self.store
+                        .lock()
+                        .await
+                        .record_usage(
+                            &self.session_id,
+                            &run_id,
+                            role.billed_as(),
+                            role.model.as_deref(),
+                            &usage,
+                            None,
+                        )
+                        .ok();
+                }
+                checks.push(check);
+            }
+            None => checks.push(Check {
+                kind: CheckKind::Review,
+                name: format!("Review by {reviewer}"),
+                status: CheckStatus::Skipped,
+                summary: format!("skipped: no role named `{reviewer}`"),
+                output: None,
+                risk: None,
+                findings: Vec::new(),
+                reviewer: None,
+            }),
+        }
+        if let Err(err) = workspace.release().await {
+            tracing::warn!("failed to release night checkout {checkout_id}: {err:#}");
+        }
+        v::assess(checks)
+    }
+
+    /// A review night: each task built, checked and reviewed, and sent back with what was
+    /// found until it passes or its rounds run out. Tasks run one after another, each on
+    /// top of the ones accepted before it.
+    async fn run_night_review(self: Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) {
+        use crate::night::{NightStatus, NightTask, TaskState};
+        let Some(mut report) = self.night_report().await else {
+            return;
+        };
+        let config = report.config.clone();
+        let started = std::time::Instant::now();
+        let budget = std::time::Duration::from_secs_f64(config.max_hours * 3600.0);
+        let timeout = std::time::Duration::from_secs(config.timeout_secs);
+        let night_branch = report.branch.clone();
+        let (reviewer, commands, provider) = {
+            let registry = self.registry.read().await;
+            let mut commands = registry.verify.commands.clone();
+            if let Some(guard) = config.guard.as_ref().filter(|g| !g.trim().is_empty()) {
+                if !commands.contains(guard) {
+                    commands.push(guard.clone());
+                }
+            }
+            (
+                config.reviewer_role(&registry).unwrap_or_default(),
+                commands,
+                registry
+                    .roles
+                    .get(&config.role)
+                    .map(|r| r.provider.as_str().to_string())
+                    .unwrap_or_default(),
+            )
+        };
+
+        let finish = |mut report: crate::night::NightReport, status: NightStatus, why: String| {
+            report.status = status;
+            report.finished_at = Some(now_secs());
+            report.ended_because = Some(why);
+            report
+        };
+
+        // A reviewer that can't run would fail every task; say so before spending anything.
+        if let Some(role) = self.registry.read().await.roles.get(&reviewer).cloned() {
+            let availability = crate::availability::probe(&role).await;
+            if !availability.available {
+                let why = availability
+                    .reason
+                    .unwrap_or_else(|| "it is not reachable".into());
+                let report = finish(
+                    report,
+                    NightStatus::Stopped,
+                    format!("the reviewer `{reviewer}` can't run: {why}"),
+                );
+                self.publish_night(report).await;
+                return;
+            }
+        }
+
+        report.tasks = config
+            .task_list()
+            .into_iter()
+            .enumerate()
+            .map(|(i, task)| NightTask {
+                n: i as u32 + 1,
+                task,
+                state: TaskState::Waiting,
+                worker_id: None,
+                rounds: 0,
+                findings: Vec::new(),
+                summary: String::new(),
+                files: Vec::new(),
+            })
+            .collect();
+        self.publish_night(report.clone()).await;
+
+        for index in 0..report.tasks.len() {
+            if *stop.borrow() {
+                let report = finish(report, NightStatus::Stopped, "stopped by the person".into());
+                self.publish_night(report).await;
+                return;
+            }
+            if started.elapsed() >= budget {
+                let report = finish(
+                    report,
+                    NightStatus::Finished,
+                    "the time budget is spent".into(),
+                );
+                self.publish_night(report).await;
+                return;
+            }
+            if self.is_rate_limited(&provider).await {
+                let report = finish(
+                    report,
+                    NightStatus::Stopped,
+                    format!("{provider} hit its usage limit"),
+                );
+                self.publish_night(report).await;
+                return;
+            }
+
+            let task_text = report.tasks[index].task.clone();
+            let worker_id = format!("w-night-{}-t{}", report.id, index + 1);
+            report.tasks[index].worker_id = Some(worker_id.clone());
+            report.tasks[index].state = TaskState::Building;
+            report.tasks[index].rounds = 1;
+            self.publish_night(report.clone()).await;
+
+            let brief = crate::night::task_brief(&config, &task_text);
+            let run = self.run_delegation_on(
+                worker_id.clone(),
+                &config.role,
+                &brief,
+                Vec::new(),
+                Some(&night_branch),
+            );
+            tokio::pin!(run);
+            let built = tokio::select! {
+                outcome = &mut run => outcome,
+                _ = stop.changed() => {
+                    self.cancel_worker(&worker_id).await;
+                    (&mut run).await
+                }
+            };
+            let record = match built {
+                Ok(record) => record,
+                Err(err) => {
+                    report.tasks[index].state = TaskState::Failed;
+                    report.tasks[index].findings = vec![format!("{err:#}")];
+                    self.publish_night(report.clone()).await;
+                    continue;
+                }
+            };
+            let worker_branch = format!("{}/{worker_id}", crate::isolation::BRANCH_PREFIX);
+
+            loop {
+                let record = self
+                    .worker(&worker_id)
+                    .await
+                    .unwrap_or_else(|| record.clone());
+                report.tasks[index].summary = record.summary.trim().to_string();
+                report.tasks[index].files = record
+                    .diff
+                    .as_ref()
+                    .map(|d| d.files.clone())
+                    .unwrap_or_default();
+                let changed = record.diff.as_ref().is_some_and(|d| d.files_changed > 0);
+                if *stop.borrow() {
+                    break;
+                }
+                if !changed || record.branch.is_none() {
+                    report.tasks[index].state = TaskState::Failed;
+                    report.tasks[index].findings = vec![if record.is_error {
+                        format!(
+                            "the worker did not finish: {}",
+                            record.summary.lines().next().unwrap_or_default()
+                        )
+                    } else {
+                        "it made no change".into()
+                    }];
+                    break;
+                }
+
+                report.tasks[index].state = TaskState::Reviewing;
+                self.publish_night(report.clone()).await;
+                let round = report.tasks[index].rounds;
+                let checked = self
+                    .check_night_task(
+                        &format!("night-{}-t{}-r{round}", report.id, index + 1),
+                        &night_branch,
+                        &worker_branch,
+                        &task_text,
+                        &record.summary,
+                        &reviewer,
+                        &commands,
+                        timeout,
+                    )
+                    .await;
+                let findings = crate::night::review_feedback(&checked);
+                report.tasks[index].findings = findings.clone();
+
+                if crate::night::passes(&checked) {
+                    match self
+                        .workspaces
+                        .advance_branch(&night_branch, &worker_branch)
+                        .await
+                    {
+                        Ok(()) => {
+                            report.tasks[index].state = TaskState::Accepted;
+                            report.tasks[index].findings.clear();
+                            // On the night's branch now; its own branch goes.
+                            let _ = self.workspaces.discard(&worker_branch).await;
+                            if let Some(mut done) = self.worker(&worker_id).await {
+                                done.branch = None;
+                                self.upsert(done).await;
+                            }
+                        }
+                        Err(err) => {
+                            report.tasks[index].state = TaskState::NeedsYou;
+                            report.tasks[index].findings =
+                                vec![format!("passed, but could not be added: {err:#}")];
+                        }
+                    }
+                    break;
+                }
+                if round >= config.max_rounds || started.elapsed() >= budget {
+                    // Out of rounds: left on its own branch, with what is still wrong.
+                    report.tasks[index].state = TaskState::NeedsYou;
+                    break;
+                }
+
+                report.tasks[index].state = TaskState::Revising;
+                report.tasks[index].rounds = round + 1;
+                self.publish_night(report.clone()).await;
+                let feedback = format!(
+                    "The review of your change found problems. Fix every one, then check your \
+                     work again:\n\n- {}",
+                    if findings.is_empty() {
+                        "the checks did not pass; run them and make them pass".to_string()
+                    } else {
+                        findings.join("\n- ")
+                    }
+                );
+                if let Err(err) = self.revise_with(&worker_id, feedback).await {
+                    report.tasks[index].state = TaskState::NeedsYou;
+                    report.tasks[index]
+                        .findings
+                        .push(format!("could not send it back: {err:#}"));
+                    break;
+                }
+                if !self.settled(&worker_id, &mut stop).await {
+                    break;
+                }
+            }
+            self.publish_night(report.clone()).await;
+        }
+
+        let status = if *stop.borrow() {
+            NightStatus::Stopped
+        } else {
+            NightStatus::Finished
+        };
+        let why = if status == NightStatus::Stopped {
+            "stopped by the person".to_string()
+        } else {
+            "every task was worked through".to_string()
+        };
+        let report = finish(report, status, why);
+        self.publish_night(report).await;
+    }
+
+    async fn run_night_metric(self: Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) {
         use crate::night::{experiment_task, Experiment, NightStatus};
         let Some(mut report) = self.night_report().await else {
             return;

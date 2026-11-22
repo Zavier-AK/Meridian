@@ -473,12 +473,40 @@ runs a proposed plan unedited.
 
 ## Night shift
 
-Set a goal and a way to score it, and walk away. This is Karpathy's
+Leave it work for the night and walk away. Coding agents already write decent code; what
+nobody is around to do at night is make them check it and go again. So the night shift is
+built around review. There are two kinds, chosen at the top of the **Night** tab.
+
+### Work through tasks (the default)
+
+You give it:
+
+- **a list of tasks**, one per line ("add keyboard shortcuts to the week view", "cover
+  the date parser with tests");
+- optionally **an aim** for the night, which every task is told;
+- **a reviewer**: another role, or the project's reviewer from **Change fleet › Checks
+  before merge**. It has to be a different role from the one doing the work;
+- **rounds per task** (1 to 6, default 3), and a role and a budget in hours.
+
+Then, task by task, in order:
+
+1. A worker builds the task on top of everything that has passed so far.
+2. The project's checks (`[verify] commands`) run on it, and the reviewer reads the diff.
+3. If the checks pass and the reviewer calls it low risk, it is **accepted** onto the
+   night's branch. Otherwise everything they found (failed commands with their output,
+   the reviewer's findings with file and line) goes **back to the same worker** to fix,
+   and it is checked again.
+4. A task still failing after its last round **needs you**: it is left on its own branch,
+   with the last findings, for you to look at in the morning.
+
+### Improve a score
+
+For work that really has a number. This is Karpathy's
 [autoresearch](https://github.com/karpathy/autoresearch) loop, pointed at a codebase
 instead of a training run. You give it:
 
 - **a goal**, in plain words ("make the test suite faster without dropping tests");
-- **a score command** — whatever it prints last is the score — and whether higher or
+- **a score command** (whatever it prints last is the score) and whether higher or
   lower is better;
 - optionally **a command that must keep passing**, such as the test suite;
 - **a role** to make the changes, and a budget in experiments and hours.
@@ -493,15 +521,21 @@ Then, round after round:
    Kept changes are fast-forwarded onto the night's branch; everything else is thrown
    away.
 
-It stops when the budget is spent, when you press **Stop**, when the role's provider hits
-its usage limit, or after three rounds in a row produce no score. It also refuses to
-start if the starting point can't be scored, so it never spends anything it can't judge.
+A score night stops when the budget is spent, when you press **Stop**, when the role's
+provider hits its usage limit, or after three rounds in a row produce no score. It also
+refuses to start if the starting point can't be scored, so it never spends anything it
+can't judge. A task night stops on the same budget, Stop and usage limits, or when every
+task has been worked through.
+
+### Either way
 
 - **Your checkout is never touched.** All the work happens on `harness/night-<id>`, and
-  experiment branches are cleaned up as it goes.
-- **The morning report** is on the **Night** tab: starting and best score, a chart of
-  every experiment against the best-so-far line, and each experiment with what it changed
-  and why it was kept or thrown away. A notification tells you when it ends.
+  branches of work that was accepted or thrown away are cleaned up as it goes.
+- **The morning report** is on the **Night** tab. For tasks: how many passed review, how
+  many need you, and each task with its rounds, files and last findings, with a link to
+  review the ones left for you. For a score: starting and best score, a chart of every
+  experiment against the best-so-far line, and why each was kept or thrown away. A
+  notification tells you when it ends.
 - **Propose for review** turns the night's branch into an ordinary merge proposal. It is
   verified and gated, and obeys the autonomy dial like any other change.
 - **Closing the project stops the night.** Nothing keeps running where you can't see it.
@@ -509,6 +543,11 @@ start if the starting point can't be scored, so it never spends anything it can'
 Headless:
 
 ```bash
+harness-cli night "Get the calendar ready for the beta" \
+  --task "Add keyboard shortcuts to the week view" \
+  --task "Cover the date parser with tests" \
+  --reviewer tester --rounds 3 --hours 8 --propose
+
 harness-cli night "Make the benchmark faster" --metric ./bench.sh --lower \
   --guard "cargo test" --experiments 30 --hours 8 --propose
 ```

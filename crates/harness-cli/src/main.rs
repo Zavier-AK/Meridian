@@ -111,15 +111,30 @@ enum Command {
     #[command(hide = true)]
     Hook { which: String },
 
-    /// Run a night shift: try one change at a time on its own branch, keep what scores
-    /// better, and throw the rest away. Ctrl-C stops it; what was kept stays kept.
+    /// Run a night shift. With `--task`, work through the tasks: each is built, checked
+    /// and reviewed, and sent back with what was found until it passes. With `--metric`,
+    /// try one change at a time and keep what scores better. Ctrl-C stops it; what passed
+    /// or was kept stays.
     Night {
-        /// What to improve, in plain words.
+        /// What to improve, in plain words. With tasks, context every task is given.
+        #[arg(default_value = "")]
         goal: String,
+
+        /// A task to work through; repeat for several. Makes it a review night.
+        #[arg(long = "task")]
+        tasks: Vec<String>,
+
+        /// The role that reviews each task (default: the project's [verify] reviewer).
+        #[arg(long)]
+        reviewer: Option<String>,
+
+        /// Builds and reviews per task, the first included.
+        #[arg(long, default_value = "3")]
+        rounds: u32,
 
         /// Prints the score; the last number in its output counts.
         #[arg(long)]
-        metric: String,
+        metric: Option<String>,
 
         /// Lower scores are better (the default is higher).
         #[arg(long)]
@@ -438,6 +453,29 @@ fn render(event: &HarnessEvent, streaming: &mut bool) {
                     },
                     report.ended_because.as_deref().unwrap_or("done"),
                     report.headline()
+                );
+            } else if let Some(task) = report
+                .tasks
+                .iter()
+                .find(|t| !matches!(t.state, harness_core::night::TaskState::Waiting))
+                .and_then(|_| {
+                    report
+                        .tasks
+                        .iter()
+                        .rev()
+                        .find(|t| !matches!(t.state, harness_core::night::TaskState::Waiting))
+                })
+            {
+                println!(
+                    "  ☾ task {} ({:?}, round {}): {}{}",
+                    task.n,
+                    task.state,
+                    task.rounds,
+                    task.task.lines().next().unwrap_or_default(),
+                    task.findings
+                        .first()
+                        .map(|f| format!(" — {}", f.lines().next().unwrap_or_default()))
+                        .unwrap_or_default()
                 );
             } else if let Some(e) = report.experiments.last() {
                 println!(
@@ -1170,6 +1208,9 @@ async fn main() -> Result<()> {
 
         Command::Night {
             goal,
+            tasks,
+            reviewer,
+            rounds,
             metric,
             lower,
             guard,
@@ -1179,12 +1220,23 @@ async fn main() -> Result<()> {
             timeout,
             propose,
         } => {
-            use harness_core::night::{Direction, NightConfig, NightStatus};
+            use harness_core::night::{Direction, NightConfig, NightMode, NightStatus};
             let renderer = spawn_renderer(rx, Arc::downgrade(&harness), None, false);
+            if tasks.is_empty() && metric.is_none() {
+                anyhow::bail!("give tasks (--task …) or a score command (--metric …)");
+            }
             harness
                 .start_night(NightConfig {
+                    mode: if tasks.is_empty() {
+                        NightMode::Metric
+                    } else {
+                        NightMode::Review
+                    },
                     goal: goal.clone(),
-                    metric: metric.clone(),
+                    tasks: tasks.clone(),
+                    max_rounds: *rounds,
+                    reviewer: reviewer.clone(),
+                    metric: metric.clone().unwrap_or_default(),
                     direction: if *lower {
                         Direction::Lower
                     } else {
