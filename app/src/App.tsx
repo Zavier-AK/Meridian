@@ -50,7 +50,6 @@ import type {
   PluginCommandSpec,
   QuotaReport,
   RepoSummary,
-  Role,
   SessionInfo,
   UsageRow,
   Worker,
@@ -873,25 +872,20 @@ export default function App() {
   /** The first project of this run: the session starts, and says what's ready. */
   function startFirst(info: SessionInfo) {
     setSession(info);
-    const blocked = info.roles.filter((r) => !r.available);
-    // Home is where the app opens: a status line there is noise, so only problems show.
-    if (info.home) {
-      setChat(groupByReason(blocked));
-      return;
+    // Roles that can't run are listed, with why and a Fix link, in the workers panel; the
+    // chat only says something when none can run, since then nothing asked will happen.
+    const ready = info.roles.filter((r) => r.available);
+    if (ready.length === 0 && info.roles.length > 0) {
+      setChat([
+        {
+          kind: "notice",
+          tone: "warn",
+          text: "No role in the fleet can run right now, so nothing can be delegated. The workers panel says why for each; Change fleet fixes it.",
+        },
+      ]);
+    } else {
+      setChat([]);
     }
-    setChat([
-      {
-        kind: "notice",
-        tone: "info",
-        text: info.resumed_head_session
-          ? `Session up. Resumed the previous Meridian-owned Claude conversation. ${info.roles.length - blocked.length} of ${info.roles.length} roles ready.`
-          : `Session up with a fresh Claude conversation. ${info.roles.length - blocked.length} of ${info.roles.length} roles ready.`,
-      },
-      // Surfaced here rather than discovered mid-delegation, which costs a turn.
-      // Grouped by reason: four roles blocked on one missing CLI is one problem
-      // to fix, not four, and repeating the same sentence per role buries that.
-      ...groupByReason(blocked),
-    ]);
   }
 
   /** Waits for the chat box to hand over its draft, for "send it". */
@@ -1544,22 +1538,6 @@ export default function App() {
  * Several roles usually share a backend, so listing a reason per role repeats the same
  * remedy and hides how few things actually need fixing.
  */
-function groupByReason(blocked: Role[]): ChatItem[] {
-  const byReason = new Map<string, string[]>();
-
-  for (const role of blocked) {
-    const reason = role.unavailable_reason ?? "backend not reachable";
-    byReason.set(reason, [...(byReason.get(reason) ?? []), role.name]);
-  }
-
-  return [...byReason].map(([reason, names]) => ({
-    kind: "notice" as const,
-    tone: "warn" as const,
-    text: `${names.join(", ")} unavailable — ${reason}`,
-  }));
-}
-
-/** Fold an event into the head transcript. */
 function reduceChat(
   prev: ChatItem[],
   event: HarnessEvent,

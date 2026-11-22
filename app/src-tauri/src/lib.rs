@@ -2743,6 +2743,22 @@ mod tests {
         assert!(!harness_core::orchestrator::is_home(dir.path()));
     }
 
+    /// Pasted images and agents' screenshots are shown from `data:` URLs. Without these
+    /// in the security policy the window refuses to load them, and pasting an image
+    /// fails with "couldn't read that image".
+    #[test]
+    fn the_window_may_show_images_from_data_urls() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = conf["app"]["security"]["csp"].as_str().unwrap();
+        let img = csp
+            .split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with("img-src"))
+            .expect("an img-src directive");
+        assert!(img.contains("data:") && img.contains("blob:"), "{img}");
+    }
+
     #[test]
     fn a_project_is_keyed_by_its_canonical_path() {
         let dir = tempfile::tempdir().unwrap();

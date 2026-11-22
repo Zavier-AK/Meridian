@@ -22,7 +22,8 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("that file isn't an image this can read"));
+    img.onerror = () =>
+      reject(new Error("couldn't read that image; try PNG, JPEG, GIF or WebP"));
     img.src = url;
   });
 }
@@ -58,7 +59,9 @@ export async function prepareImage(file: Blob, name = "image"): Promise<ChatImag
   return { ...split(url), preview: url, name };
 }
 
-/** The image files among what was pasted or dropped. */
+/** The image files among what was pasted or dropped. macOS puts one copied image on the
+ * clipboard twice, as PNG and as TIFF; the TIFF copy is dropped when a PNG or JPEG of the
+ * same paste is there, so one screenshot is one image. */
 export function imageFiles(list: DataTransferItemList | FileList | null | undefined): File[] {
   if (!list) return [];
   const files: File[] = [];
@@ -66,5 +69,6 @@ export function imageFiles(list: DataTransferItemList | FileList | null | undefi
     const file = "getAsFile" in entry ? (entry.kind === "file" ? entry.getAsFile() : null) : entry;
     if (file && file.type.startsWith("image/")) files.push(file);
   }
-  return files;
+  const hasWebImage = files.some((f) => SENDABLE.includes(f.type));
+  return hasWebImage ? files.filter((f) => f.type !== "image/tiff") : files;
 }
