@@ -423,6 +423,33 @@ second accent to yellow".
 Meridian's mark, a round mind divided into rooms (one per agent), is drawn in the
 accent, so it follows the theme too. Only the app icon keeps fixed colours.
 
+**Settings → Background** is a slow, moving field of characters behind the window, drawn
+in your two accents:
+
+- **Liquid** (the default): blobs drifting, merging and splitting, lava-lamp style. One
+  follows the pointer.
+- **Tide**: layered swells rolling across, seen side on.
+- **Current**: a marbled flow that never repeats.
+- **Ripple**: drops landing on still water. Moving the pointer drops more.
+- **Leaves**: branches framing the window from the top corners, swaying, with gusts
+  running through them and the odd leaf falling.
+- **Sakura**: a blossom branch in the corner and petals tumbling down.
+- **Off**.
+
+**Intensity**, **speed** (0 holds it still) and **grain** (the size of the characters)
+are sliders. It uses the theme's accents unless you untick *Use the theme's accents* and
+give it two colours of its own. Everything previews as you change it, and Save keeps it.
+Voice works too: "set the background to sakura", "turn the background off", "set the
+background intensity to 40%".
+
+It's drawn in a worker, off the page's thread, so it never slows typing or the chat. It
+runs at 30 frames a second while Meridian is in front, 10 when it's behind another
+window, and not at all while it's hidden. With **Reduce Motion** on in System Settings it
+holds a single still frame. Chat bubbles, cards and panels are near-solid, so behind text
+it reads as a texture.
+
+![The Liquid background in the Graphite theme, behind the chat and the workers](screenshots/home.png)
+
 ## When Claude's sign-in fails
 
 If a Claude run fails to sign in ("OAuth token has expired", "could not be refreshed"),

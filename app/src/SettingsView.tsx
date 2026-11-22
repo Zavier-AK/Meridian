@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { AppSettings, VoiceSettings } from "./types";
+import type { AppSettings, BackgroundSettings, VoiceSettings } from "./types";
+import { BACKGROUND_DEFAULTS, BACKGROUND_STYLES, applyBackground } from "./asciiBackground";
 import VoiceSettingsPanel from "./VoiceSettings";
 import { FONTS, applyFont } from "./fonts";
 import { PRESETS, THEME_DEFAULTS, applyTheme, isLightColour } from "./appSettings";
@@ -52,6 +53,16 @@ export default function SettingsView({ onSaved, onClose }: Props) {
   useEffect(
     () => () => {
       if (savedTheme.current) applyTheme(savedTheme.current);
+    },
+    [],
+  );
+  // The background previews the same way.
+  useEffect(() => {
+    if (settings) applyBackground(settings.background);
+  }, [settings?.background]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(
+    () => () => {
+      if (savedTheme.current) applyBackground(savedTheme.current.background);
     },
     [],
   );
@@ -325,6 +336,11 @@ export default function SettingsView({ onSaved, onClose }: Props) {
         </div>
       </div>
 
+      <BackgroundSection
+        background={settings.background ?? BACKGROUND_DEFAULTS}
+        onChange={(change) => update({ background: { ...(settings.background ?? BACKGROUND_DEFAULTS), ...change } })}
+      />
+
       <div className="actions">
         <button
           className="ghost"
@@ -342,4 +358,130 @@ export default function SettingsView({ onSaved, onClose }: Props) {
       </div>
     </section>
   );
+}
+
+/** The moving ASCII background: which, how strong, how fast, how fine, and its colours. */
+function BackgroundSection({
+  background,
+  onChange,
+}: {
+  background: BackgroundSettings;
+  onChange: (change: Partial<BackgroundSettings>) => void;
+}) {
+  const ownColours = background.accent !== null || background.accent_2 !== null;
+  const about = BACKGROUND_STYLES.find((style) => style.id === background.style)?.about;
+  const off = background.style === "off";
+  return (
+    <div className="settings-section">
+      <h3>Background</h3>
+      <p className="muted">
+        A moving field of characters behind the window. It pauses while the window is hidden, and
+        holds still when the system asks for reduced motion.
+      </p>
+      <div className="background-styles" role="radiogroup" aria-label="Background">
+        {BACKGROUND_STYLES.map((style) => (
+          <button
+            key={style.id}
+            role="radio"
+            aria-checked={background.style === style.id}
+            className={`background-style ${background.style === style.id ? "chosen" : ""}`}
+            onClick={() => onChange({ style: style.id })}
+          >
+            {style.label}
+          </button>
+        ))}
+      </div>
+      {about && <p className="muted background-about">{about}</p>}
+      {!off && (
+        <>
+          <div className="background-sliders">
+            <label className="field">
+              <span>Intensity</span>
+              <input
+                type="range"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={background.intensity}
+                onChange={(event) => onChange({ intensity: Number(event.target.value) })}
+              />
+              <span className="mono muted">{Math.round(background.intensity * 100)}%</span>
+            </label>
+            <label className="field">
+              <span>Speed</span>
+              <input
+                type="range"
+                min={0}
+                max={2}
+                step={0.05}
+                value={background.speed}
+                onChange={(event) => onChange({ speed: Number(event.target.value) })}
+              />
+              <span className="mono muted">{background.speed === 0 ? "still" : `${background.speed.toFixed(2)}×`}</span>
+            </label>
+            <label className="field">
+              <span>Grain</span>
+              <input
+                type="range"
+                min={8}
+                max={18}
+                step={1}
+                value={background.grain}
+                onChange={(event) => onChange({ grain: Number(event.target.value) })}
+              />
+              <span className="mono muted">{background.grain}px</span>
+            </label>
+          </div>
+          <div className="background-colours">
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={!ownColours}
+                onChange={(event) =>
+                  onChange(
+                    event.target.checked
+                      ? { accent: null, accent_2: null }
+                      : {
+                          accent: cssColour("--accent") ?? "#ff9ebb",
+                          accent_2: cssColour("--accent-2") ?? "#b69cff",
+                        },
+                  )
+                }
+              />
+              <span>Use the theme's accents</span>
+            </label>
+            {ownColours && (
+              <div className="theme-colours">
+                {(
+                  [
+                    ["accent", "Colour"],
+                    ["accent_2", "Second colour"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="theme-colour">
+                    <input
+                      type="color"
+                      value={background[key] ?? "#ffffff"}
+                      onChange={(event) => onChange({ [key]: event.target.value })}
+                      aria-label={`Background ${label.toLowerCase()}`}
+                    />
+                    <span>
+                      <span className="theme-colour-name">{label}</span>
+                      <span className="mono muted">{background[key]}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** A theme colour as `#rrggbb`, for seeding the pickers; `null` if it isn't a plain hex. */
+function cssColour(name: string): string | null {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(value) ? value : null;
 }

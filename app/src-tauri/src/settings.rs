@@ -43,6 +43,83 @@ pub struct Settings {
     /// The folder Meridian opens at launch, for chats that aren't about a project yet.
     /// `None` is `~/Documents/Meridian Home`.
     pub home_folder: Option<String>,
+    /// The moving ASCII layer behind the window.
+    pub background: BackgroundSettings,
+}
+
+/// The ASCII background's styles, as `asciiBackground.ts` draws them; "off" draws none.
+pub const BACKGROUND_STYLES: &[&str] = &[
+    "off", "liquid", "tide", "current", "ripple", "leaves", "sakura",
+];
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackgroundSettings {
+    /// One of [`BACKGROUND_STYLES`].
+    pub style: String,
+    /// How strongly it shows, 0.1 to 1.
+    pub intensity: f64,
+    /// 0 (still) to 2.
+    pub speed: f64,
+    /// Character cell height in pixels, 8 to 18: smaller is finer.
+    pub grain: u32,
+    /// Its own two colours, `#rrggbb`; `None` follows the theme's accents.
+    pub accent: Option<String>,
+    pub accent_2: Option<String>,
+}
+
+impl Default for BackgroundSettings {
+    fn default() -> Self {
+        Self {
+            style: "liquid".into(),
+            intensity: 0.6,
+            speed: 1.0,
+            grain: 12,
+            accent: None,
+            accent_2: None,
+        }
+    }
+}
+
+/// A `#rrggbb` colour, lower-cased; blank is `None`.
+fn hex_colour(colour: Option<String>) -> Result<Option<String>, String> {
+    let colour = colour
+        .map(|c| c.trim().to_lowercase())
+        .filter(|c| !c.is_empty());
+    if let Some(c) = &colour {
+        // Interpolated into CSS, so nothing but the six hex digits gets through.
+        let valid =
+            c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|c| c.is_ascii_hexdigit());
+        if !valid {
+            return Err(format!("`{c}` is not a #rrggbb colour"));
+        }
+    }
+    Ok(colour)
+}
+
+impl BackgroundSettings {
+    pub fn validated(mut self) -> Result<Self, String> {
+        self.style = self.style.trim().to_lowercase();
+        if !BACKGROUND_STYLES.contains(&self.style.as_str()) {
+            return Err(format!(
+                "`{}` isn't a background: {}",
+                self.style,
+                BACKGROUND_STYLES.join(", ")
+            ));
+        }
+        if !(0.1..=1.0).contains(&self.intensity) {
+            return Err("background intensity must be between 0.1 and 1".into());
+        }
+        if !(0.0..=2.0).contains(&self.speed) {
+            return Err("background speed must be between 0 and 2".into());
+        }
+        if !(8..=18).contains(&self.grain) {
+            return Err("background grain must be between 8 and 18 pixels".into());
+        }
+        self.accent = hex_colour(self.accent.take())?;
+        self.accent_2 = hex_colour(self.accent_2.take())?;
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,6 +167,7 @@ impl Default for Settings {
             openrouter_models: Vec::new(),
             notes: NotesSettings::default(),
             home_folder: None,
+            background: BackgroundSettings::default(),
         }
     }
 }
@@ -138,20 +216,9 @@ impl Settings {
             return Err("max turns must be between 1 and 1000".into());
         }
         for colour in [&mut self.base, &mut self.accent, &mut self.accent_2] {
-            *colour = colour
-                .take()
-                .map(|c| c.trim().to_lowercase())
-                .filter(|c| !c.is_empty());
-            if let Some(c) = colour {
-                // Interpolated into CSS, so nothing but the six hex digits gets through.
-                let valid = c.len() == 7
-                    && c.starts_with('#')
-                    && c[1..].chars().all(|c| c.is_ascii_hexdigit());
-                if !valid {
-                    return Err(format!("`{c}` is not a #rrggbb colour"));
-                }
-            }
+            *colour = hex_colour(colour.take())?;
         }
+        self.background = self.background.validated()?;
         self.font = self.font.trim().to_lowercase();
         if !FONTS.contains(&self.font.as_str()) {
             return Err(format!(
@@ -324,6 +391,14 @@ mod tests {
                 folder: Some("/Users/me/Vault".into()),
             },
             home_folder: Some("/Users/me/Meridian Home".into()),
+            background: BackgroundSettings {
+                style: "sakura".into(),
+                intensity: 0.4,
+                speed: 0.5,
+                grain: 10,
+                accent: Some("#ff7ac6".into()),
+                accent_2: None,
+            },
         };
         save_to(&path, &settings).unwrap();
         assert_eq!(load_from(&path), settings);
@@ -333,6 +408,53 @@ mod tests {
         let loaded = load_from(&path);
         assert_eq!(loaded.max_turns, 50);
         assert!(loaded.notifications);
+        assert_eq!(loaded.background, BackgroundSettings::default());
+    }
+
+    #[test]
+    fn the_background_takes_only_what_it_can_draw() {
+        let with = |background: BackgroundSettings| {
+            Settings {
+                background,
+                ..Default::default()
+            }
+            .validated()
+        };
+        let ok = with(BackgroundSettings {
+            style: " Leaves ".into(),
+            accent: Some(" #7BE38A ".into()),
+            accent_2: Some("".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(ok.background.style, "leaves");
+        assert_eq!(ok.background.accent.as_deref(), Some("#7be38a"));
+        assert_eq!(ok.background.accent_2, None);
+
+        for bad in [
+            BackgroundSettings {
+                style: "fireworks".into(),
+                ..Default::default()
+            },
+            BackgroundSettings {
+                intensity: 0.0,
+                ..Default::default()
+            },
+            BackgroundSettings {
+                speed: 3.0,
+                ..Default::default()
+            },
+            BackgroundSettings {
+                grain: 40,
+                ..Default::default()
+            },
+            BackgroundSettings {
+                accent: Some("url(x)".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(with(bad.clone()).is_err(), "{bad:?} accepted");
+        }
     }
 
     #[test]

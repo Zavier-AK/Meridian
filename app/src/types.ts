@@ -470,6 +470,21 @@ export type AppSettings = {
   notes: { enabled: boolean; folder: string | null };
   /** The folder the app opens at launch; `null` is `~/Documents/Meridian Home`. */
   home_folder?: string | null;
+  /** The moving ASCII layer behind the window. Mirrors `settings::BackgroundSettings`. */
+  background?: BackgroundSettings;
+};
+
+export type BackgroundSettings = {
+  style: "off" | "liquid" | "tide" | "current" | "ripple" | "leaves" | "sakura";
+  /** 0.1 to 1. */
+  intensity: number;
+  /** 0 (still) to 2. */
+  speed: number;
+  /** Character cell height in pixels, 8 to 18. */
+  grain: number;
+  /** Its own colours; `null` follows the theme's accents. */
+  accent: string | null;
+  accent_2: string | null;
 };
 
 export type NoteInfo = { path: string; title: string; modified: number; bytes: number };
