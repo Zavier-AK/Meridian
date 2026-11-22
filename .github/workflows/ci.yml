@@ -42,6 +42,18 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
+      # macOS disks ignore case, so two modules like AsciiBackground.tsx and
+      # asciiBackground.ts are one file there, and the Mac build fails while this
+      # (case-sensitive) runner passes. Catch it here.
+      - name: No file names that clash on a Mac
+        working-directory: .
+        run: |
+          clashes=$(git ls-files | sed -E 's/\.(tsx?|jsx?|mjs|cjs)$//' | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
+          if [ -n "$clashes" ]; then
+            echo "These paths differ only in case or a TS/JS extension, which macOS treats as the same file:"
+            echo "$clashes"
+            exit 1
+          fi
       - run: npm ci
       - name: Typecheck and build
         run: npm run build

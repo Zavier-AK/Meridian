@@ -47,7 +47,7 @@ pub struct Settings {
     pub background: BackgroundSettings,
 }
 
-/// The ASCII background's styles, as `asciiBackground.ts` draws them; "off" draws none.
+/// The ASCII background's styles, as `asciiEngine.ts` draws them; "off" draws none.
 pub const BACKGROUND_STYLES: &[&str] = &[
     "off", "liquid", "tide", "current", "ripple", "leaves", "sakura",
 ];

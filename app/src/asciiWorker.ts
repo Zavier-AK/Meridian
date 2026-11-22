@@ -3,7 +3,7 @@
  * The ASCII background, drawn off the page's thread so it never competes with typing,
  * scrolling or the chat streaming in. The page sends what changes; this draws.
  */
-import { createLoop, createRenderer, type Driver } from "./asciiBackground";
+import { createLoop, createRenderer, type Driver } from "./asciiEngine";
 
 let driver: Driver | null = null;
 
