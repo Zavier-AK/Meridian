@@ -18,8 +18,8 @@ pub const FONTS: &[&str] = &["grotesk", "geist", "plex", "editorial", "manrope",
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// The head agent's model when a project is opened without choosing one. `None`
-    /// leaves it to the Claude CLI's own default.
+    /// The head agent's model when a project is opened without choosing one. `None` is
+    /// the latest Sonnet (`harness_core::orchestrator::HEAD_MODEL`).
     pub default_model: Option<String>,
     /// The head agent's turn limit — the runaway-loop rail for a whole conversation.
     pub max_turns: u32,

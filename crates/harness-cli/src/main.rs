@@ -736,7 +736,7 @@ async fn voice_agent(
                 "skills" => "Skills: release-notes (on), code-review (on), pdf (off)",
                 "mcp" => "MCP servers: github (on), linear (off)",
                 "roles" => "Roles: builder on claude sonnet; tester on claude haiku; reviewer on claude opus",
-                "settings" => "Settings: default_model = (CLI default); max_turns = 200; notifications = on; accent = (theme); voice.speak_replies = on; voice.speech_voice = bm_george; voice.speech_rate = 1.0; voice.agent_model = haiku; voice.browser_model = sonnet; voice.handsfree_idle_secs = 30",
+                "settings" => "Settings: default_model = default (sonnet); max_turns = 200; notifications = on; accent = (theme); voice.speak_replies = on; voice.speech_voice = bm_george; voice.speech_rate = 1.0; voice.agent_model = haiku; voice.browser_model = sonnet; voice.handsfree_idle_secs = 30",
                 "projects" => "Open projects: shop (in front), blog",
                 _ => "Topics: skills, mcp, roles, settings, projects",
             };

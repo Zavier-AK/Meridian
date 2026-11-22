@@ -23,7 +23,7 @@ pub fn changed(app: &AppHandle, what: &str) {
 pub const SETTING_KEYS: &[(&str, &str)] = &[
     (
         "default_model",
-        "the head agent's model: a model name, or default",
+        "the head agent's model: a model name, or default (the newest sonnet)",
     ),
     ("max_turns", "the head agent's turn limit, a number"),
     ("notifications", "on or off"),
@@ -207,7 +207,10 @@ fn setting_value(s: &settings::Settings, key: &str) -> String {
     let v = &s.voice;
     let on = |b: bool| if b { "on" } else { "off" }.to_string();
     match key {
-        "default_model" => s.default_model.clone().unwrap_or_else(|| "default".into()),
+        "default_model" => s
+            .default_model
+            .clone()
+            .unwrap_or_else(|| format!("default ({})", harness_core::orchestrator::HEAD_MODEL)),
         "max_turns" => s.max_turns.to_string(),
         "notifications" => on(s.notifications),
         "base" => s.base.clone().unwrap_or_else(|| "default".into()),

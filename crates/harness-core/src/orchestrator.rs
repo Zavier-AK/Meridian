@@ -221,15 +221,25 @@ pub fn orchestrator_brief_with(roles: &[crate::engine::RoleInfo], native: &[Stri
     )
 }
 
+/// The head agent's model when none is chosen. An alias, so it is always the latest
+/// Sonnet: the Claude CLI resolves `sonnet` and `opus` to the newest of each. Left to
+/// the CLI's own default instead, the head could start on Haiku, which loses track of a
+/// long session.
+pub const HEAD_MODEL: &str = "sonnet";
+
 /// The head agent's own role definition. Approved only to read and delegate.
 pub fn orchestrator_role(model: Option<String>, max_turns: Option<u32>) -> Role {
+    let model = model
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| HEAD_MODEL.to_string());
     let mut tools: Vec<String> = ORCHESTRATOR_TOOLS.iter().map(|s| s.to_string()).collect();
     tools.extend(McpServer::allowed_tool_names());
     tools.extend(HEAD_GITHUB_READS.iter().map(|s| s.to_string()));
 
     Role {
         provider: Provider::Claude,
-        model,
+        model: Some(model),
         // The head agent proposes; workers dispose. It is not approved to write, and has
         // no deny list either: a write it tries goes to the person, who says yes or no.
         isolation: Isolation::None,
@@ -583,6 +593,28 @@ mod tests {
                 unavailable_reason: None,
             },
         ]
+    }
+
+    #[test]
+    fn the_head_agent_runs_on_the_latest_sonnet_unless_told_otherwise() {
+        assert_eq!(
+            orchestrator_role(None, None).model.as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(
+            orchestrator_role(Some("  ".into()), None).model.as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(
+            orchestrator_role(Some("opus".into()), None)
+                .model
+                .as_deref(),
+            Some("opus")
+        );
+        assert_eq!(
+            orchestrator_role_native(None, None).model.as_deref(),
+            Some("sonnet")
+        );
     }
 
     #[test]

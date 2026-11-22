@@ -99,23 +99,11 @@ export default function App() {
   const [quotas, setQuotas] = useState<QuotaReport | null>(null);
   /** The session, or one of the two full-pane views that replace it. */
   const [view, setView] = useState<AppView>("session");
-  // The navigation rail: icons alone, or with names beside them.
-  const [navExpanded, setNavExpanded] = useState(() => {
-    try {
-      return localStorage.getItem("meridian.navExpanded") === "1";
-    } catch {
-      return false;
-    }
-  });
+  // The navigation rail: icons alone, or with names beside them. Both side panels start
+  // collapsed every launch, leaving the room to the chat; they open when asked.
+  const [navExpanded, setNavExpanded] = useState(false);
   function toggleNav() {
-    setNavExpanded((expanded) => {
-      try {
-        localStorage.setItem("meridian.navExpanded", expanded ? "0" : "1");
-      } catch {
-        // Remembering is a convenience.
-      }
-      return !expanded;
-    });
+    setNavExpanded((expanded) => !expanded);
   }
   // The repositories the project spans, re-read when the code may have changed.
   const [repos, setRepos] = useState<RepoSummary[]>([]);
@@ -136,22 +124,9 @@ export default function App() {
   const [headModel, setHeadModel] = useState<string | null>(null);
   // Tokens the head agent's first request carried: what each of its turns re-reads.
   const [headPrompt, setHeadPrompt] = useState<number | null>(null);
-  const [railCollapsed, setRailCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem("harness.railCollapsed") === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [railCollapsed, setRailCollapsed] = useState(true);
   function toggleRail() {
-    setRailCollapsed((collapsed) => {
-      try {
-        localStorage.setItem("harness.railCollapsed", collapsed ? "0" : "1");
-      } catch {
-        // Remembering is a convenience.
-      }
-      return !collapsed;
-    });
+    setRailCollapsed((collapsed) => !collapsed);
   }
   const [railMode, setRailMode] = useState<"workers" | "changes">(() => {
     try {
@@ -526,11 +501,17 @@ export default function App() {
     let cancelled = false;
     invoke<HarnessEvent[]>("chat_history", { project: projectRoot })
       .then((events) => {
-        if (cancelled || events.length === 0) return;
+        if (cancelled) return;
         const restored = historyToChat(events);
+        if (restored.length === 0) return;
+        // Ending on a divider already says where this conversation starts.
+        const last = restored[restored.length - 1];
+        const endsDivided = last.kind === "notice" && last.text === NEW_CONVERSATION;
         setChat((prev) => [
           ...restored,
-          { kind: "notice", tone: "info", text: "Earlier conversation above." },
+          ...(endsDivided
+            ? []
+            : [{ kind: "notice" as const, tone: "info" as const, text: EARLIER }]),
           ...prev,
         ]);
       })
@@ -724,13 +705,19 @@ export default function App() {
 
   /** A fresh conversation with the head agent: the long one stops costing context. */
   async function newConversation() {
-    if (!window.confirm("Start a new conversation? The head agent forgets this one. Workers, reviews waiting and notes stay as they are.")) return;
+    if (!window.confirm("Start a new conversation? The head agent forgets this one, but it stays in the chat to scroll back to. Workers, reviews waiting and notes stay as they are.")) return;
     try {
       await invoke("new_conversation");
       headRun.current = null;
       setHeadPrompt(null);
       setQueued([]);
-      setChat([{ kind: "notice", tone: "info", text: "New conversation. Workers and reviews carry on as before." }]);
+      // The earlier conversation stays above, to scroll back to; only the head agent forgets it.
+      setChat((prev) => {
+        // A marker left at the very end says nothing the divider doesn't.
+        const last = prev[prev.length - 1];
+        const kept = last?.kind === "notice" && (last.text === EARLIER || last.text === NEW_CONVERSATION) ? prev.slice(0, -1) : prev;
+        return [...kept, { kind: "notice", tone: "info", text: NEW_CONVERSATION }];
+      });
     } catch (err) {
       setChat((prev) => [...prev, { kind: "notice", tone: "error", text: String(err) }]);
     }
@@ -2102,6 +2089,13 @@ function addShot(prev: ChatItem[], runId: string, path: string | undefined): Cha
   return [...prev, { kind: "shots", runId, paths: [path] }];
 }
 
+/** Where history restored after a restart or a switch ends. */
+const EARLIER = "Earlier conversation above.";
+
+/** The divider between conversations in the chat. */
+const NEW_CONVERSATION =
+  "New conversation from here. The head agent doesn't remember anything above this line; workers and reviews carry on as before.";
+
 function historyToChat(events: HarnessEvent[]): ChatItem[] {
   let items: ChatItem[] = [];
   for (const event of events) {
@@ -2116,8 +2110,9 @@ function historyToChat(events: HarnessEvent[]): ChatItem[] {
         items.push({ kind: "notice", tone: "info", text: noticeLine(event.text) });
         break;
       case "conversation_reset":
-        // Only what came after the last new conversation is this conversation.
-        items = [];
+        // Earlier conversations stay readable above a divider; the head agent only
+        // remembers what comes after the last one.
+        if (items.length > 0) items.push({ kind: "notice", tone: "info", text: NEW_CONVERSATION });
         break;
       case "assistant_text":
         if (!event.partial) items.push({ kind: "assistant", text: event.text });

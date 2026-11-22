@@ -118,6 +118,8 @@ export default function WorkerRail({
         </button>
       </div>
 
+      {/* Only the body scrolls: the header, with its hide button, stays in view. */}
+      <div className="rail-body">
       {mode === "changes" ? (
         changes
       ) : (
@@ -279,6 +281,7 @@ export default function WorkerRail({
       )}
         </>
       )}
+      </div>
     </aside>
   );
 }
