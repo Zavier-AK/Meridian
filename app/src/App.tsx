@@ -753,6 +753,10 @@ export default function App() {
       } else if (mod && event.key === "\\") {
         event.preventDefault();
         toggleNav();
+      } else if (event.key === "Escape" && adding) {
+        // The Open a project dialog closes first, like any other dialog.
+        event.preventDefault();
+        setAdding(false);
       } else if (event.key === "Escape" && view !== "session" && !overlayOpen) {
         // Out of Tools or Settings first; a second Esc can then stop a turn.
         event.preventDefault();
@@ -1498,8 +1502,9 @@ export default function App() {
 
       {adding && (
         <div className="drawer-scrim" onClick={() => setAdding(false)}>
-          <div className="add-project" onClick={(event) => event.stopPropagation()}>
+          <div className="add-project">
             <StartGate
+              onClose={() => setAdding(false)}
               onStarted={(info) => {
                 setAdding(false);
                 void focusProject(info.project_root);

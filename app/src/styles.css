@@ -590,7 +590,15 @@ button.link:hover { color: var(--accent-strong); }
   position: fixed; inset: 0; display: grid; place-items: center;
   pointer-events: none;
 }
-.add-project > * { pointer-events: auto; }
+/* Only the card takes clicks: everything around it falls through to the scrim, which closes
+   the dialog. The start screen fills the window when it is the whole app, not here. */
+.add-project .gate { height: auto; padding: 0; pointer-events: none; }
+.add-project .gate-card { pointer-events: auto; position: relative; }
+.gate-close {
+  position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; padding: 0;
+  border-radius: 8px; font-size: 18px; line-height: 1; color: var(--muted); background: transparent;
+}
+.gate-close:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 
 /* Limits. Vendor-reported headroom and our own measured spend, kept visibly apart. */
 button.meter { background: none; border: none; cursor: pointer; font: inherit; }
