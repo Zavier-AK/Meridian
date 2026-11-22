@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import VoiceHud from "./VoiceHud";
+import AsciiBackground from "./AsciiBackground";
 import "./styles.css";
 import { applyFont, rememberedFont } from "./fonts";
 
@@ -19,5 +20,14 @@ const voiceBar = isVoiceBar();
 if (voiceBar) document.body.classList.add("hud");
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>{voiceBar ? <VoiceHud /> : <App />}</React.StrictMode>,
+  <React.StrictMode>
+    {voiceBar ? (
+      <VoiceHud />
+    ) : (
+      <>
+        <AsciiBackground />
+        <App />
+      </>
+    )}
+  </React.StrictMode>,
 );

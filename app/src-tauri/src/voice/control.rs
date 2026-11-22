@@ -43,6 +43,12 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
         "font",
         "grotesk (Space Grotesk, the default), geist, plex (IBM Plex), editorial (Fraunces and Inter), manrope or system",
     ),
+    (
+        "background",
+        "the moving ASCII background: liquid, tide, current, ripple, leaves, sakura, or off",
+    ),
+    ("background.intensity", "how strongly it shows, 0.1 to 1"),
+    ("background.speed", "0 (still) to 2"),
     ("voice.enabled", "on or off (off stops voice)"),
     ("voice.hotkey", "e.g. Alt+Space"),
     ("voice.stt_model", "tiny, base or small"),
@@ -149,6 +155,23 @@ pub fn apply_setting(s: &mut settings::Settings, key: &str, value: &str) -> Resu
         "accent" => s.accent = accent(value)?,
         "accent_2" | "second_accent" => s.accent_2 = accent(value)?,
         "font" => s.font = font(value)?,
+        "background" => {
+            let style = text.to_lowercase();
+            s.background.style = match style.as_str() {
+                "none" | "no" | "false" | "disable" | "disabled" => "off".into(),
+                "default" | "on" => settings::BackgroundSettings::default().style,
+                "waves" | "sea" | "ocean" => "tide".into(),
+                "lava" | "lava lamp" | "blobs" => "liquid".into(),
+                "cherry blossom" | "petals" | "blossom" => "sakura".into(),
+                "trees" | "leaf" => "leaves".into(),
+                _ => style,
+            };
+        }
+        "background.intensity" => {
+            let n: f64 = number(value.trim().trim_end_matches('%'))?;
+            s.background.intensity = if n > 1.0 { n / 100.0 } else { n };
+        }
+        "background.speed" => s.background.speed = number(value)?,
         "voice.enabled" => v.enabled = flag(value)?,
         "voice.hotkey" => v.hotkey = text,
         "voice.stt_model" => {
@@ -217,6 +240,9 @@ fn setting_value(s: &settings::Settings, key: &str) -> String {
         "accent" => s.accent.clone().unwrap_or_else(|| "default".into()),
         "accent_2" => s.accent_2.clone().unwrap_or_else(|| "default".into()),
         "font" => s.font.clone(),
+        "background" => s.background.style.clone(),
+        "background.intensity" => format!("{:.2}", s.background.intensity),
+        "background.speed" => format!("{:.2}", s.background.speed),
         "voice.enabled" => on(v.enabled),
         "voice.hotkey" => v.hotkey.clone(),
         "voice.stt_model" => v.stt_model.as_str().trim_end_matches(".en").to_string(),
@@ -572,6 +598,18 @@ mod tests {
     #[test]
     fn settings_change_by_key_in_plain_words() {
         let mut s = settings::Settings::default();
+        apply_setting(&mut s, "background", "cherry blossom").unwrap();
+        assert_eq!(s.background.style, "sakura");
+        apply_setting(&mut s, "background", "off").unwrap();
+        assert_eq!(s.background.style, "off");
+        apply_setting(&mut s, "background.intensity", "40%").unwrap();
+        assert!((s.background.intensity - 0.4).abs() < 1e-9);
+        apply_setting(&mut s, "background", "fireworks").unwrap();
+        assert!(
+            s.clone().validated().is_err(),
+            "an unknown background is refused on save"
+        );
+        s.background.style = "liquid".into();
         apply_setting(&mut s, "notifications", "off").unwrap();
         assert!(!s.notifications);
         apply_setting(&mut s, "voice.speech_rate", "1.1x").unwrap();

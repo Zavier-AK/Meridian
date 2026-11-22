@@ -9,14 +9,15 @@ nothing touches your code until you've reviewed it. Every agent is the vendor's 
 `claude`, `codex` — or a local model, so the work runs on Claude and ChatGPT subscriptions
 instead of API billing, and local models cost nothing.
 
-![Meridian's home chat: a request, the head agent's reply, Meridian's notice that the worker finished, and its change waiting for review](docs/screenshots/home.png)
+![Meridian in the Graphite theme: the head agent splitting a request across three workers, one change checked and waiting for review, with the Liquid ASCII background moving behind the chat](docs/screenshots/home.png)
 
 ## What it does
 
-![The chat with the head agent, workers running on the right](docs/screenshots/chat.png)
+![The chat with the head agent, side panels folded away, the Leaves background framing it](docs/screenshots/chat.png)
 
 - **Opens straight into a chat.** No folder to pick first: Meridian starts in its own
-  home folder, ready to type into. Ask anything there, or open a project from the sidebar.
+  home folder, ready to type into, with both side panels folded away until you want
+  them. Ask anything there, or open a project from the sidebar.
 - **Delegates in parallel.** Ask for a change; the head agent splits it up and hands the
   pieces to workers — builders, testers, reviewers — each in its own worktree on its own
   branch. Claude, Codex and local models (Ollama, LM Studio) can all be workers, and so can
@@ -35,10 +36,16 @@ instead of API billing, and local models cost nothing.
 - **You choose how much runs alone.** A slider, from *Ask* (every step waits for you) to
   *Land most* (verified, low-risk changes land by themselves).
 - **Plans and night shifts.** Multi-step work becomes a plan on a board, which runs by
-  itself (or waits for you, with the slider on *Ask*) and can be stopped at any point. A
-  night shift works through a list of tasks overnight, sending each back to be fixed
-  until it passes your checks and an independent review (or runs experiments and keeps
-  only the ones that improve a metric).
+  itself (or waits for you, with the slider on *Ask*) and can be stopped at any point.
+  Leave a [night shift](docs/GUIDE.md#night-shift) a list of tasks: each is built, then
+  checked by your tests and reviewed by another role, and sent back with what they found
+  until it passes. In the morning, what passed is on one branch for you, and anything
+  still failing is waiting with the findings. (Or give it a score to improve, and it
+  keeps only the changes that improve it.)
+- **Conversations you can scroll back through.** *New conversation* gives the head agent
+  a fresh start (a long one costs context on every turn), but the old one stays in the
+  chat above a divider, after a restart too. The head agent runs on the newest Sonnet
+  unless you choose another model; `sonnet` and `opus` always mean the newest of each.
 - **Remembers between projects.** A folder of markdown notes (Obsidian works) holds what
   agents learn and how you like to work. Each session gets only a short part of it up
   front and searches the rest, and every note an agent writes shows in the chat. See
@@ -50,7 +57,11 @@ instead of API billing, and local models cost nothing.
   sees it and can hand it to a worker. Screenshots the agents take of what they build
   appear in the chat too.
 - **Make it yours.** Pick three colours (a base, an accent and a second accent) or
-  start from a preset, and a typeface. See [look and feel](docs/GUIDE.md#look-and-feel).
+  start from a preset, and a typeface. Behind it all runs a slow, moving ASCII
+  background in your accent colours: *Liquid*, *Tide*, *Current*, *Ripple*, *Leaves* or
+  *Sakura*, with its strength, speed and grain up to you (or off). It's drawn off the
+  page's thread, pauses while the window is hidden, and holds still with Reduce Motion.
+  See [look and feel](docs/GUIDE.md#look-and-feel).
 - **Talk to it.** Hold ⌥Space anywhere: "what's waiting for me?", "merge the builder's
   change", "find me a cheaper flight". Web tasks run in their own browser and always ask
   before sending, buying or posting.
@@ -59,11 +70,24 @@ instead of API billing, and local models cost nothing.
 
 <table>
   <tr>
+    <td width="33%"><img src="docs/screenshots/background-liquid.png" alt="The Liquid background in Graphite: blobs of characters drifting and merging behind the chat"></td>
+    <td width="33%"><img src="docs/screenshots/background-leaves.png" alt="The Leaves background in Graphite: a canopy of characters hanging from both top corners"></td>
+    <td width="33%"><img src="docs/screenshots/background-sakura.png" alt="The Sakura background in Ember: a blossom branch in the corner and petals falling"></td>
+  </tr>
+  <tr>
+    <td><b>Liquid</b></td>
+    <td><b>Leaves</b></td>
+    <td><b>Sakura</b>, in Ember</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
     <td width="50%"><img src="docs/screenshots/flow.png" alt="The Flow tab: you, the head agent, the workers, your branch and GitHub, with what moved between them"></td>
     <td width="50%"><img src="docs/screenshots/changes.png" alt="The Changes panel: every file touched, lines added and removed, and which agent touched it"></td>
   </tr>
   <tr>
-    <td><b>Flow</b> — who's doing what, and what's moving between them.</td>
+    <td><b>Flow</b> — who's doing what, and what's moving between them (Ember).</td>
     <td><b>Changes</b> — every file touched this session, by file or by agent.</td>
   </tr>
   <tr>
@@ -71,8 +95,8 @@ instead of API billing, and local models cost nothing.
     <td width="50%"><img src="docs/screenshots/slider.png" alt="The autonomy slider in the chat bar"></td>
   </tr>
   <tr>
-    <td><b>Review</b> — comment on lines and send it back, merge, or open a PR.</td>
-    <td><b>Autonomy</b> — how much runs without you.</td>
+    <td><b>Review</b> — comment on lines and send it back, merge, or open a PR (Ember).</td>
+    <td><b>Autonomy</b> — how much runs without you (Ember).</td>
   </tr>
   <tr>
     <td colspan="2"><img src="docs/screenshots/github.png" alt="The GitHub view: every repository in the project, its branches and pull requests"></td>
@@ -99,8 +123,9 @@ Launchpad, Spotlight or the Dock. **To update, run `./scripts/install-mac.sh` ag
 pulls the latest code, rebuilds and reinstalls. Working on Meridian itself? `cd app &&
 npm install && npm run tauri dev` runs it with live reload instead.
 
-Pick a project folder and press **Start session**. If the folder isn't a git repository
-or has no fleet (`roles.toml`) yet, the start screen offers to set both up.
+It opens straight into a chat in its home folder. To work on a project, press **+** in the
+sidebar and pick its folder; if it isn't a git repository or has no fleet
+(`roles.toml`) yet, Meridian offers to set both up.
 
 Prefer a terminal? The same engine runs headless:
 
@@ -142,7 +167,7 @@ your OpenRouter key and nothing else.
   [local models](docs/GUIDE.md#attaching-a-local-model),
   [OpenRouter](docs/GUIDE.md#openrouter),
   [notes](docs/GUIDE.md#notes),
-  [themes](docs/GUIDE.md#look-and-feel),
+  [themes and backgrounds](docs/GUIDE.md#look-and-feel),
   [plugins](docs/GUIDE.md#plugins),
   [sign-in problems](docs/GUIDE.md#when-claudes-sign-in-fails).
 - **[Project status](docs/STATUS.md)** — what's verified, what isn't, and what's next.
