@@ -96,6 +96,7 @@ export default function SettingsView({ onSaved, onClose }: Props) {
         <h3>Head agent</h3>
         <p className="muted">
           Used when a project opens. A head agent already running keeps what it started with.
+          “sonnet” and “opus” always mean the newest of each.
         </p>
         <label className="field">
           <span>Model</span>
@@ -103,7 +104,7 @@ export default function SettingsView({ onSaved, onClose }: Props) {
             list="model-suggestions"
             value={settings.default_model ?? ""}
             onChange={(event) => update({ default_model: event.target.value || null })}
-            placeholder="Claude CLI default"
+            placeholder="sonnet (the newest)"
             spellCheck={false}
           />
           <datalist id="model-suggestions">

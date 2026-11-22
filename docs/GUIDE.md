@@ -1271,7 +1271,8 @@ agent never lists them, so it stays a planner.
 
 **Settings** (⌘,) holds:
 
-- the head agent's default model and turn limit;
+- the head agent's default model (the newest Sonnet unless you choose; `sonnet` and
+  `opus` always mean the newest of each) and its turn limit;
 - whether to send notifications;
 - the theme's three colours (see [look and feel](#look-and-feel)). Everything else is
   derived from them.
