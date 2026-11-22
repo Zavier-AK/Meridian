@@ -1762,6 +1762,10 @@ use harness_core::night::{Direction, NightConfig, NightStatus};
 
 fn night(goal: &str, direction: Direction, guard: Option<&str>, max: u32) -> NightConfig {
     NightConfig {
+        mode: harness_core::night::NightMode::Metric,
+        tasks: vec![],
+        max_rounds: 3,
+        reviewer: None,
         goal: goal.into(),
         metric: "cat score".into(),
         direction,
@@ -2600,4 +2604,141 @@ async fn new_work_waits_once_the_five_hour_budget_is_spent() {
         .delegate_async("local_builder", "WRITE:c.txt:c", vec![])
         .await
         .is_err());
+}
+
+// ---------------------------------------------------------------- review nights
+
+fn review_night(tasks: &[&str], rounds: u32) -> NightConfig {
+    NightConfig {
+        mode: harness_core::night::NightMode::Review,
+        tasks: tasks.iter().map(|t| t.to_string()).collect(),
+        max_rounds: rounds,
+        reviewer: Some("quick".into()),
+        goal: String::new(),
+        metric: String::new(),
+        direction: Direction::Higher,
+        guard: None,
+        role: "local_builder".into(),
+        max_experiments: 20,
+        max_hours: 1.0,
+        timeout_secs: 30,
+    }
+}
+
+fn with_quick_reviewer(url: &str, verify: &str) -> String {
+    format!(
+        "{ROLES}
+[roles.quick]
+provider = \"openai_compat\"
+base_url = \"{url}\"
+model = \"quick\"
+isolation = \"none\"
+
+[verify]
+{verify}
+"
+    )
+}
+
+#[tokio::test]
+async fn a_review_night_sends_a_task_back_until_its_checks_pass() {
+    use harness_core::night::TaskState;
+    let url = review_server(&[(
+        "quick",
+        r#"{"risk_level": "low", "summary": "looks right", "findings": []}"#,
+    )])
+    .await;
+    // The project's check needs fixed.txt, which the first pass doesn't write.
+    let f = fixture_with(&with_quick_reviewer(
+        &url,
+        "commands = [\"test -f fixed.txt\"]",
+    ))
+    .await;
+    let task = "MOCK-SH: if [ -f a.txt ]; then echo fixed > fixed.txt; else echo first > a.txt; fi";
+    f.harness
+        .start_night(review_night(&[task, "MOCK-SH: echo second > b.txt"], 3))
+        .await
+        .unwrap();
+    let report = night_until_done(&f).await;
+    assert_eq!(report.status, NightStatus::Finished, "{report:?}");
+
+    let first = &report.tasks[0];
+    assert_eq!(first.state, TaskState::Accepted, "{first:?}");
+    assert_eq!(first.rounds, 2, "built, sent back once, then passed");
+    assert!(first.findings.is_empty());
+    assert_eq!(report.tasks[1].state, TaskState::Accepted);
+    assert!(
+        report.headline().starts_with("2 of 2 tasks passed review"),
+        "{}",
+        report.headline()
+    );
+
+    // Both on the night's branch, the second built on the first; neither on the checkout.
+    let files = f
+        .harness
+        .workspaces()
+        .branch_files(&report.branch)
+        .await
+        .unwrap();
+    let paths: Vec<&str> = files.iter().map(|c| c.path.as_str()).collect();
+    for expected in ["a.txt", "fixed.txt", "b.txt"] {
+        assert!(paths.contains(&expected), "{expected} in {paths:?}");
+    }
+    assert!(!f.root.join("fixed.txt").exists());
+}
+
+#[tokio::test]
+async fn a_task_still_failing_review_is_left_for_the_person_with_the_findings() {
+    use harness_core::night::TaskState;
+    let url = review_server(&[(
+        "quick",
+        r#"{"risk_level": "medium", "summary": "missing tests", "findings": [{"severity": "medium", "file": "c.txt", "line": 1, "message": "no test covers this"}]}"#,
+    )])
+    .await;
+    let f = fixture_with(&with_quick_reviewer(&url, "commands = []")).await;
+    f.harness
+        .start_night(review_night(
+            &["MOCK-SH: echo never good enough > c.txt"],
+            2,
+        ))
+        .await
+        .unwrap();
+    let report = night_until_done(&f).await;
+    let task = &report.tasks[0];
+    assert_eq!(task.state, TaskState::NeedsYou, "{task:?}");
+    assert_eq!(task.rounds, 2);
+    assert!(
+        task.findings
+            .iter()
+            .any(|f| f.contains("c.txt:1") && f.contains("no test covers this")),
+        "{:?}",
+        task.findings
+    );
+    // Left on its own branch, waiting for review like any finished worker.
+    let worker = f
+        .harness
+        .worker(task.worker_id.as_ref().unwrap())
+        .await
+        .unwrap();
+    assert!(worker.branch.is_some());
+    assert_eq!(report.kept(), 0);
+}
+
+#[tokio::test]
+async fn a_review_night_needs_a_tasks_list_and_a_reviewer() {
+    let f = fixture().await;
+    let mut config = review_night(&[], 3);
+    assert!(
+        f.harness.start_night(config.clone()).await.is_err(),
+        "no tasks"
+    );
+    config.tasks = vec!["do it".into()];
+    config.reviewer = None;
+    let err = f.harness.start_night(config.clone()).await.unwrap_err();
+    assert!(err.to_string().contains("needs a reviewer"), "{err}");
+    config.reviewer = Some("local_builder".into());
+    assert!(
+        f.harness.start_night(config).await.is_err(),
+        "not the worker's own role"
+    );
 }

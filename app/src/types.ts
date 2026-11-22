@@ -539,7 +539,14 @@ export type Plan = {
 
 /** Mirrors `harness_core::night::NightConfig`. */
 export type NightConfig = {
+  mode: "review" | "metric";
   goal: string;
+  /** Review: the tasks, done in order. */
+  tasks: string[];
+  /** Review: builds and reviews per task, the first included. */
+  max_rounds: number;
+  /** Review: who reviews; `null` uses the project's reviewer. */
+  reviewer: string | null;
   metric: string;
   direction: "higher" | "lower";
   guard: string | null;
@@ -570,6 +577,19 @@ export type NightReport = {
   finished_at: number | null;
   ended_because: string | null;
   proposed_as: string | null;
+  tasks: NightTask[];
+};
+
+/** Mirrors `harness_core::night::NightTask`. */
+export type NightTask = {
+  n: number;
+  task: string;
+  state: "waiting" | "building" | "reviewing" | "revising" | "accepted" | "needs_you" | "failed";
+  worker_id: string | null;
+  rounds: number;
+  findings: string[];
+  summary: string;
+  files: string[];
 };
 
 // ---------- Voice ----------

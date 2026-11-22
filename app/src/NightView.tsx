@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { NightConfig, NightReport, Role } from "./types";
+import type { NightConfig, NightReport, NightTask, Role } from "./types";
 
 type Props = {
   report: NightReport | null;
@@ -13,7 +13,11 @@ type Props = {
 };
 
 const BLANK: NightConfig = {
+  mode: "review",
   goal: "",
+  tasks: [],
+  max_rounds: 3,
+  reviewer: null,
   metric: "",
   direction: "higher",
   guard: null,
@@ -93,9 +97,54 @@ function ScoreChart({ report }: { report: NightReport }) {
   );
 }
 
+const TASK_STATE: Record<NightTask["state"], string> = {
+  waiting: "waiting",
+  building: "building",
+  reviewing: "being reviewed",
+  revising: "fixing what review found",
+  accepted: "passed review",
+  needs_you: "needs you",
+  failed: "failed",
+};
+
+/** A review night's morning report: each task, how many rounds it took, what is left. */
+function ReviewTasks({ report, onSelectWorker }: { report: NightReport; onSelectWorker: (id: string) => void }) {
+  return (
+    <ol className="night-tasks">
+      {report.tasks.map((task) => (
+        <li key={task.n} className={`night-task ${task.state}`}>
+          <div className="night-task-head">
+            <span className="mono">#{task.n}</span>
+            <span className={`badge night-state ${task.state}`}>{TASK_STATE[task.state]}</span>
+            {task.rounds > 0 && (
+              <span className="muted">
+                {task.rounds} round{task.rounds === 1 ? "" : "s"}
+              </span>
+            )}
+            {task.worker_id && (
+              <button className="link" onClick={() => onSelectWorker(task.worker_id as string)}>
+                {task.state === "needs_you" ? "Review it" : "Open"}
+              </button>
+            )}
+          </div>
+          <p className="night-task-text">{task.task}</p>
+          {task.files.length > 0 && <p className="muted mono night-task-files">{task.files.join(", ")}</p>}
+          {task.findings.length > 0 && (
+            <ul className="night-findings">
+              {task.findings.map((finding, i) => (
+                <li key={i}>{finding.split("\n")[0]}</li>
+              ))}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 /**
- * Night shift: set a goal and a score, leave, and come back to a branch of kept
- * improvements and a report of everything tried.
+ * Night shift: leave a list of tasks (or a goal and a score), and come back to work that
+ * was built, reviewed and fixed while you were away.
  *
  * Three states on one tab. Nothing yet (or "start another"): the form. Running: live
  * progress and Stop. Ended: the morning report, with the one action that matters —
@@ -139,12 +188,24 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
   }, [report?.status]);
 
   const set = (patch: Partial<NightConfig>) => setConfig((prev) => ({ ...prev, ...patch }));
+  // The tasks as typed, one per line, so editing doesn't fight the array.
+  const [taskText, setTaskText] = useState(() => (report?.config.tasks ?? []).join("\n"));
+  useEffect(() => {
+    if (report) setTaskText((report.config.tasks ?? []).join("\n"));
+  }, [report?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tasks = taskText.split("\n").map((t) => t.trim()).filter(Boolean);
+  const mode = config.mode ?? "metric";
 
   async function start() {
     setStarting(true);
     setError(null);
     try {
-      await onStart({ ...config, guard: config.guard?.trim() ? config.guard.trim() : null });
+      await onStart({
+        ...config,
+        mode,
+        tasks: mode === "review" ? tasks : [],
+        guard: config.guard?.trim() ? config.guard.trim() : null,
+      });
       setComposing(false);
     } catch (err) {
       setError(String(err));
@@ -154,20 +215,80 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
   }
 
   if (composing || !report) {
-    const ready = config.goal.trim() && config.metric.trim() && config.role;
+    const ready =
+      mode === "review" ? tasks.length > 0 && config.role : config.goal.trim() && config.metric.trim() && config.role;
+    const reviewers = roles.filter((role) => role.available && role.name !== config.role);
     return (
       <section className="night night-setup">
         <header className="plan-head">
           <div>
             <h2>Night shift</h2>
             <p className="muted">
-              Give it a goal and a command that prints a score. It tries one small change at a
-              time on its own branch, keeps what scores better, and throws the rest away. Your
-              checkout is never touched; in the morning you review one branch.
+              {mode === "review"
+                ? "Leave it a list of tasks. Each one is built, then checked by your tests and reviewed by another role; whatever they find goes back to the worker to fix, round after round, until it passes. In the morning, what passed is on one branch for you to review, and anything still failing is waiting with what was found."
+                : "Give it a goal and a command that prints a score. It tries one small change at a time on its own branch, keeps what scores better, and throws the rest away. Your checkout is never touched; in the morning you review one branch."}
             </p>
           </div>
         </header>
 
+        <div className="night-mode" role="tablist" aria-label="Kind of night shift">
+          <button role="tab" aria-selected={mode === "review"} className={mode === "review" ? "active" : ""} onClick={() => set({ mode: "review" })}>
+            Work through tasks
+          </button>
+          <button role="tab" aria-selected={mode === "metric"} className={mode === "metric" ? "active" : ""} onClick={() => set({ mode: "metric" })}>
+            Improve a score
+          </button>
+        </div>
+
+        {mode === "review" && (
+          <>
+            <label className="field">
+              <span>Tasks, one per line</span>
+              <textarea
+                value={taskText}
+                onChange={(e) => setTaskText(e.target.value)}
+                rows={6}
+                placeholder={"Add keyboard shortcuts to the week view\nCover the date parser with tests\nMake the settings page work on a phone"}
+              />
+              <small className="muted">Done in order, each on top of the ones that passed before it.</small>
+            </label>
+            <label className="field">
+              <span>Tonight's aim (optional)</span>
+              <input
+                value={config.goal}
+                onChange={(e) => set({ goal: e.target.value })}
+                placeholder="Get the calendar ready for the beta"
+              />
+            </label>
+            <div className="night-row">
+              <label className="field grow">
+                <span>Reviewer</span>
+                <select value={config.reviewer ?? ""} onChange={(e) => set({ reviewer: e.target.value || null })}>
+                  <option value="">The project's reviewer (Checks before merge)</option>
+                  {reviewers.map((role) => (
+                    <option key={role.name} value={role.name}>
+                      {role.name} · {role.provider}
+                      {role.model ? ` · ${role.model}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Rounds per task</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={6}
+                  value={config.max_rounds ?? 3}
+                  onChange={(e) => set({ max_rounds: Number(e.target.value) })}
+                />
+              </label>
+            </div>
+          </>
+        )}
+
+        {mode === "metric" && (
+        <>
         <label className="field">
           <span>Goal</span>
           <textarea
@@ -211,6 +332,8 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
           />
           <small className="muted">A change that breaks this is thrown away, however well it scores.</small>
         </label>
+        </>
+        )}
 
         <div className="night-row">
           <label className="field grow">
@@ -225,6 +348,7 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
               ))}
             </select>
           </label>
+          {mode === "metric" && (
           <label className="field">
             <span>Experiments</span>
             <input
@@ -235,6 +359,7 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
               onChange={(e) => set({ max_experiments: Number(e.target.value) })}
             />
           </label>
+          )}
           <label className="field">
             <span>Hours</span>
             <input
@@ -264,16 +389,20 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
     );
   }
 
-  const kept = report.experiments.filter((e) => e.kept).length;
+  const review = (report.config.mode ?? "metric") === "review";
+  const kept = review
+    ? (report.tasks ?? []).filter((t) => t.state === "accepted").length
+    : report.experiments.filter((e) => e.kept).length;
   const change = gain(report);
   const running = report.status === "running";
+  const count = (state: NightTask["state"]) => (report.tasks ?? []).filter((t) => t.state === state).length;
 
   return (
     <section className="night">
       <header className="plan-head">
         <div>
           <h2>{running ? "Night shift running" : report.status === "stopped" ? "Night shift stopped" : "Morning report"}</h2>
-          <p className="muted">{report.config.goal}</p>
+          {report.config.goal && <p className="muted">{report.config.goal}</p>}
           <p className="muted mono night-branch">
             {report.branch} · {elapsed(report.started_at, report.finished_at)}
           </p>
@@ -289,6 +418,25 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
         )}
       </header>
 
+      {review ? (
+        <div className="night-stats">
+          <div>
+            <span className="muted">Passed review</span>
+            <strong>
+              {kept} of {report.tasks.length}
+            </strong>
+          </div>
+          <div>
+            <span className="muted">Need you</span>
+            <strong>{count("needs_you")}</strong>
+          </div>
+          <div>
+            <span className="muted">Rounds of review</span>
+            <strong>{report.tasks.reduce((sum, t) => sum + t.rounds, 0)}</strong>
+          </div>
+        </div>
+      ) : (
+      <>
       <div className="night-stats">
         <div>
           <span className="muted">Started at</span>
@@ -311,6 +459,8 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
       </div>
 
       <ScoreChart report={report} />
+      </>
+      )}
 
       {!running && (
         <div className="night-outcome">
@@ -324,7 +474,13 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
               className="primary"
               onClick={onPropose}
               disabled={kept === 0}
-              title={kept === 0 ? "Nothing was kept" : "Verify the night's branch and put it up for merging"}
+              title={
+                kept === 0
+                  ? review
+                    ? "No task passed review"
+                    : "Nothing was kept"
+                  : "Verify the night's branch and put it up for merging"
+              }
             >
               Propose for review
             </button>
@@ -332,6 +488,9 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
         </div>
       )}
 
+      {review && <ReviewTasks report={report} onSelectWorker={onSelectWorker} />}
+
+      {!review && (
       <ol className="night-experiments" reversed>
         {running && (
           <li className="experiment pending">
@@ -351,6 +510,7 @@ export default function NightView({ report, roles, onStart, onStop, onPropose, o
           </li>
         ))}
       </ol>
+      )}
     </section>
   );
 }

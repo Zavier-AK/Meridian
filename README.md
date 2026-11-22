@@ -36,7 +36,9 @@ instead of API billing, and local models cost nothing.
   *Land most* (verified, low-risk changes land by themselves).
 - **Plans and night shifts.** Multi-step work becomes a plan on a board, which runs by
   itself (or waits for you, with the slider on *Ask*) and can be stopped at any point. A
-  night shift runs experiments overnight and keeps only the ones that improve a metric.
+  night shift works through a list of tasks overnight, sending each back to be fixed
+  until it passes your checks and an independent review (or runs experiments and keeps
+  only the ones that improve a metric).
 - **Remembers between projects.** A folder of markdown notes (Obsidian works) holds what
   agents learn and how you like to work. Each session gets only a short part of it up
   front and searches the rest, and every note an agent writes shows in the chat. See
