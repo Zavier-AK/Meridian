@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { AppSettings, BackgroundSettings, VoiceSettings } from "./types";
-import { BACKGROUND_DEFAULTS, BACKGROUND_STYLES, applyBackground } from "./asciiBackground";
+import { BACKGROUND_DEFAULTS, BACKGROUND_STYLES, applyBackground } from "./asciiEngine";
 import VoiceSettingsPanel from "./VoiceSettings";
 import { FONTS, applyFont } from "./fonts";
 import { PRESETS, THEME_DEFAULTS, applyTheme, isLightColour } from "./appSettings";

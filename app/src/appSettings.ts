@@ -1,7 +1,7 @@
 import type { AppSettings } from "./types";
 import { setNotificationsEnabled } from "./notify";
 import { applyFont } from "./fonts";
-import { applyBackground } from "./asciiBackground";
+import { applyBackground } from "./asciiEngine";
 
 /** The theme's own three colours, for the pickers' starting point. */
 export const THEME_DEFAULTS = { base: "#16121a", accent: "#ff9ebb", accent_2: "#b69cff" };

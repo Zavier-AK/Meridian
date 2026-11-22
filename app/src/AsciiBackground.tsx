@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { createLoop, createRenderer, currentBackground, onBackgroundChange, type Driver } from "./asciiBackground";
+import { createLoop, createRenderer, currentBackground, onBackgroundChange, type Driver } from "./asciiEngine";
 
 /** Frames a second while the window is in front, and while it's behind another. */
 const FPS_FOCUSED = 30;
