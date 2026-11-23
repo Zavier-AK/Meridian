@@ -956,6 +956,12 @@ builds small things there, and points you to **Open a project** when you mean an
 project. Home sits first in the sidebar with the Meridian mark and stays open; closing your
 last project brings you back to it.
 
+**The projects you had open come back.** Quit with projects open and the next launch puts
+them back in the sidebar, and the one you were in comes to the front with its
+conversation, so you carry on where you left off. The others wait suspended, with no agent
+running, until you click one. A project you closed stays closed, and one whose folder has
+gone is skipped. The list is kept in the app's data folder (`open-projects.json`).
+
 If home can't start (no `claude` on `PATH`, say), the folder picker appears instead, with
 the reason and a button to try home again.
 

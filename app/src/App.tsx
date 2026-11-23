@@ -402,13 +402,21 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshProjects]);
 
-  // At launch: straight into the home chat, no folder to pick first.
+  // At launch: straight into the home chat, no folder to pick first. Then the projects
+  // that were open last time come back (suspended: no agent runs until one is opened),
+  // and the one that was in front comes forward with its conversation.
   const opened = useRef(false);
+  const focusRef = useRef<(projectRoot: string) => Promise<void>>(async () => {});
   useEffect(() => {
     if (opened.current) return;
     opened.current = true;
-    void openHome();
-  }, [openHome]);
+    void (async () => {
+      await openHome();
+      const front = await invoke<string | null>("reopen_projects").catch(() => null);
+      await refreshProjects();
+      if (front) await focusRef.current(front);
+    })();
+  }, [openHome, refreshProjects]);
 
   /** Switch projects, resetting the panes that belong to the one being left. */
   const focusProject = useCallback(
@@ -434,6 +442,7 @@ export default function App() {
     },
     [refreshProjects, session],
   );
+  focusRef.current = focusProject;
 
   const closeProject = useCallback(
     async (projectRoot: string) => {
