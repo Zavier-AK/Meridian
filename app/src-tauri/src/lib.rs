@@ -5,6 +5,7 @@
 //! commands the UI calls. Keeping it this small is what lets the same engine be driven
 //! headlessly by `harness-cli` and tested without a desktop.
 
+mod open_projects;
 mod plugins;
 mod preview_probe;
 mod settings;
@@ -675,14 +676,33 @@ async fn start_session(
     roles_path: Option<String>,
     model: Option<String>,
 ) -> Result<SessionInfo, String> {
+    let info = open_session(&app, &state, project_root, roles_path, model, true).await?;
+    remember_open_projects(&state).await;
+    Ok(info)
+}
+
+/// Open a project. Live, it starts its head agent and comes to the front. Otherwise it
+/// opens suspended, behind the one in front: its engine, workers and history are ready,
+/// with no agent process until it's focused. That's how projects come back at launch.
+async fn open_session(
+    app: &AppHandle,
+    state: &AppState,
+    project_root: String,
+    roles_path: Option<String>,
+    model: Option<String>,
+    live: bool,
+) -> Result<SessionInfo, String> {
     let key = project_key(&project_root);
 
     // Already open: bring it to the front, waking its head agent if it was suspended.
     {
         let mut projects = state.projects.lock().await;
         if let Some(session) = projects.get_mut(&key) {
+            if !live {
+                return Ok(describe(&key, session).await);
+            }
             if !session.is_live() {
-                relaunch_head(&app, &key, session).await?;
+                relaunch_head(app, &key, session).await?;
             }
             let info = describe(&key, session).await;
             drop(projects);
@@ -753,18 +773,6 @@ async fn start_session(
         .set_autonomy(harness_core::autonomy::load(&project))
         .await;
 
-    let (orchestrator, orchestrator_events) = Orchestrator::start(
-        Arc::clone(&harness),
-        &project,
-        model.clone(),
-        Some(settings::load().max_turns),
-        resume_session_id,
-        hook_command(),
-    )
-    .await
-    .map_err(|e| format!("{e:#}"))?;
-    let resumed_head_session = orchestrator.resumed_backend_session();
-
     // Worker and orchestrator streams are separate; the UI keys them apart by run id, and
     // by project now that several can be open at once.
     forward_events(
@@ -773,12 +781,35 @@ async fn start_session(
         key.clone(),
         worker_events,
     );
-    forward_events(app, Arc::clone(&harness), key.clone(), orchestrator_events);
+    let (head, mcp_url, resumed_head_session) = if live {
+        let (orchestrator, orchestrator_events) = Orchestrator::start(
+            Arc::clone(&harness),
+            &project,
+            model.clone(),
+            Some(settings::load().max_turns),
+            resume_session_id,
+            hook_command(),
+        )
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+        let resumed = orchestrator.resumed_backend_session();
+        let url = orchestrator.mcp_url();
+        forward_events(
+            app.clone(),
+            Arc::clone(&harness),
+            key.clone(),
+            orchestrator_events,
+        );
+        (Head::Live(Box::new(orchestrator)), url, resumed)
+    } else {
+        // Focusing it later resumes the same conversation (`relaunch_head`).
+        (Head::Suspended, String::new(), false)
+    };
 
     let info = SessionInfo {
         session_id,
         project_root: key.clone(),
-        mcp_url: orchestrator.mcp_url(),
+        mcp_url,
         backends: harness_core::detection::detect_backends().await,
         resumed_head_session,
         home: harness_core::orchestrator::is_home(&project),
@@ -803,15 +834,63 @@ async fn start_session(
         key.clone(),
         Session {
             harness,
-            head: Head::Live(Box::new(orchestrator)),
+            head,
             head_started: std::time::Instant::now(),
             project_root: project,
             roles_file,
             model: model.clone(),
         },
     );
-    *state.active.lock().await = Some(key);
+    if live {
+        *state.active.lock().await = Some(key);
+    }
     Ok(info)
+}
+
+/// Keep which projects are open, and which is in front, for the next launch.
+async fn remember_open_projects(state: &AppState) {
+    let Some(path) = open_projects::path() else {
+        return;
+    };
+    let open: Vec<String> = state
+        .projects
+        .lock()
+        .await
+        .iter()
+        .filter(|(_, session)| !harness_core::orchestrator::is_home(&session.project_root))
+        .map(|(key, _)| key.clone())
+        .collect();
+    let active = state.active.lock().await.clone();
+    let remembered = open_projects::load_from(&path).updated(&open, active);
+    if let Err(error) = open_projects::save_to(&path, &remembered) {
+        tracing::warn!("could not remember the open projects: {error}");
+    }
+}
+
+/// Put back the projects that were open last time, suspended, and say which was in front
+/// (if it was a project and it opened), for the window to bring forward.
+///
+/// A project whose folder is gone, or that won't open, is skipped rather than failing the
+/// launch; it's forgotten the next time the list is saved.
+#[tauri::command]
+async fn reopen_projects(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let Some(path) = open_projects::path() else {
+        return Ok(None);
+    };
+    let remembered = open_projects::load_from(&path);
+    for root in &remembered.projects {
+        if !PathBuf::from(root).is_dir() {
+            continue;
+        }
+        if let Err(error) = open_session(&app, &state, root.clone(), None, None, false).await {
+            tracing::warn!("could not reopen {root}: {error}");
+        }
+    }
+    let projects = state.projects.lock().await;
+    Ok(remembered.active.filter(|key| projects.contains_key(key)))
 }
 
 /// A `SessionInfo` for a project that is already open.
@@ -2056,6 +2135,7 @@ async fn focus_project(
     let info = describe(&key, session).await;
     drop(projects);
     *state.active.lock().await = Some(key);
+    remember_open_projects(&state).await;
     Ok(info)
 }
 
@@ -2064,6 +2144,14 @@ async fn focus_project(
 #[tauri::command]
 async fn close_project(state: State<'_, AppState>, project: Option<String>) -> Result<(), String> {
     let key = key_for(&state, project).await?;
+    shut_project(&state, &key).await?;
+    remember_open_projects(&state).await;
+    Ok(())
+}
+
+/// Shut a project down and forget it, without touching what the next launch reopens.
+async fn shut_project(state: &AppState, key: &str) -> Result<(), String> {
+    let key = key.to_string();
 
     let mut projects = state.projects.lock().await;
     let Some(mut session) = projects.remove(&key) else {
@@ -2091,7 +2179,7 @@ async fn close_project(state: State<'_, AppState>, project: Option<String>) -> R
 async fn stop_session(state: State<'_, AppState>) -> Result<(), String> {
     let keys: Vec<String> = state.projects.lock().await.keys().cloned().collect();
     for key in keys {
-        close_project(state.clone(), Some(key)).await?;
+        shut_project(&state, &key).await?;
     }
     Ok(())
 }
@@ -2578,6 +2666,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             inspect_project,
             write_default_roles,
+            reopen_projects,
             make_first_commit,
             open_home,
             worker_snapshot,
